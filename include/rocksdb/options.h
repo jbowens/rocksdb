@@ -1035,6 +1035,13 @@ struct ReadOptions {
   // Default: 0
   uint64_t max_skippable_internal_keys;
 
+  // A callback to determine whether relevant keys for this scan exist in a
+  // given table based on the table's properties. The callback is passed the
+  // properties of each table during iteration. If the callback returns false,
+  // the table will not be scanned.
+  // Default: empty (every table will be scanned)
+  std::function<bool(const TableProperties&)> table_filter;
+
   ReadOptions();
   ReadOptions(bool cksum, bool cache);
 };
