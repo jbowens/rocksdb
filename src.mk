@@ -59,7 +59,7 @@ LIB_SOURCES =                                                   \
   env/env_hdfs.cc                                               \
   env/env_posix.cc                                              \
   env/io_posix.cc                                               \
-  env/memenv.cc                                                 \
+  env/mock_env.cc                                              \
   memtable/hash_cuckoo_rep.cc                                   \
   memtable/hash_linklist_rep.cc                                 \
   memtable/hash_skiplist_rep.cc                                 \
@@ -204,7 +204,6 @@ TOOL_LIB_SOURCES = \
   tools/sst_dump_tool.cc                                         \
 
 MOCK_LIB_SOURCES = \
-  env/mock_env.cc \
   table/mock_table.cc \
   util/fault_injection_test_env.cc
 
