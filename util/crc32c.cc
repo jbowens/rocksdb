@@ -15,7 +15,9 @@
 #include "util/crc32c.h"
 
 #include <stdint.h>
+#if defined(__x86_64__) || defined(_WIN64)
 #include <nmmintrin.h>
+#endif
 #include "util/coding.h"
 
 namespace rocksdb {
@@ -313,6 +315,7 @@ static inline void Slow_CRC32(uint64_t* l, uint8_t const **p) {
   table0_[c >> 24];
 }
 
+#if defined(__x86_64__) || defined(_WIN64)
 __attribute__((target("sse4.2")))
 static inline void Fast_CRC32(uint64_t* l, uint8_t const **p) {
 #ifdef __LP64__
@@ -325,6 +328,7 @@ static inline void Fast_CRC32(uint64_t* l, uint8_t const **p) {
   *p += 4;
 #endif
 }
+#endif
 
 template<void (*CRC32)(uint64_t*, uint8_t const**)>
 uint32_t ExtendImpl(uint32_t crc, const char* buf, size_t size) {
@@ -370,6 +374,7 @@ uint32_t ExtendImpl(uint32_t crc, const char* buf, size_t size) {
 }
 
 // Detect if SS42 or not.
+#if defined(__x86_64__) || defined(_WIN64)
 static bool isSSE42() {
 #if defined(__GNUC__) && defined(__x86_64__) && !defined(IOS_CROSS_COMPILE)
   uint32_t c_;
@@ -387,11 +392,16 @@ static bool isSSE42() {
 
 template __attribute__((target("sse4.2")))
 uint32_t ExtendImpl<Fast_CRC32>(uint32_t, const char*, size_t);
+#endif
 
 typedef uint32_t (*Function)(uint32_t, const char*, size_t);
 
 static inline Function Choose_Extend() {
+  #if defined(__x86_64__) || defined(_WIN64)
   return isSSE42() ? ExtendImpl<Fast_CRC32> : ExtendImpl<Slow_CRC32>;
+  #else
+  return ExtendImpl<Slow_CRC32>;
+  #endif
 }
 
 bool IsFastCrc32Supported() {
