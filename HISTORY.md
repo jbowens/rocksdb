@@ -14,6 +14,8 @@
 ### Bug Fixes
 * Fix segfault caused by object premature destruction (PR #3898)
 * Fix an issue with unnecessary capture in lambda expressions (PR #3904)
+* Fsync after writing global seq number to the ingestion file in ExternalSstFileIngestionJob.
+* Fix WAL corruption caused by race condition between user write thread and FlushWAL when two_write_queue is not set.
 
 ## 5.13.1 (4/30/2018)
 ### New Features
