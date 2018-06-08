@@ -107,6 +107,16 @@ class UncollapsedRangeDelMap : public RangeDelMap {
     return false;
   }
 
+  RangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno) override {
+    // Unimplemented because the only client of this method, iteration, uses
+    // collapsed maps.
+    (void)key;
+    (void)seqno;
+    fprintf(stderr, "UncollapsedRangeDelMap::GetTombstone unimplemented");
+    abort();
+    return RangeTombstone(Slice(), Slice(), 0);
+  }
+
   bool IsRangeOverlapped(const ParsedInternalKey& start,
                          const ParsedInternalKey& end) override {
     for (const auto& tombstone : rep_) {
@@ -317,6 +327,32 @@ class CollapsedRangeDelMap : public RangeDelMap {
       }
     }
     return false;
+  }
+
+  RangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno) override {
+    ParsedInternalKey parsed_key;
+    parsed_key.user_key = key;
+    parsed_key.sequence = kMaxSequenceNumber;
+    parsed_key.type = kMaxValue;
+    // TODO(peter): The key parameter properly becomes a key in a future commit.
+    // if (!ParseInternalKey(key, &parsed_key)) {
+    //   assert(false);
+    //   // Fail open.
+    //   return RangeTombstone();
+    // }
+    auto iter = rep_.upper_bound(parsed_key);
+    if (iter == rep_.begin()) {
+      // before start of deletion intervals
+      return RangeTombstone(Slice(), iter->first.user_key, 0);
+    }
+    auto prev = iter;
+    --prev;
+    if (iter == rep_.end()) {
+      // after end of deletion intervals
+      return RangeTombstone(prev->first.user_key, Slice(), 0);
+    }
+    return RangeTombstone(prev->first.user_key, iter->first.user_key,
+                          prev->second >= seqno ? prev->second : 0);
   }
 
   bool IsRangeOverlapped(const ParsedInternalKey&,
@@ -548,6 +584,18 @@ bool RangeDelAggregator::ShouldDeleteRange(
     return false;
   }
   return tombstone_map.ShouldDeleteRange(start, end, seqno);
+}
+
+RangeTombstone RangeDelAggregator::GetTombstone(const Slice& user_key,
+                                                SequenceNumber seqno) {
+  if (rep_ == nullptr) {
+    return RangeTombstone(Slice(), Slice(), 0);
+  }
+  auto& tombstone_map = GetRangeDelMap(seqno);
+  if (tombstone_map.IsEmpty()) {
+    return RangeTombstone(Slice(), Slice(), 0);
+  }
+  return tombstone_map.GetTombstone(user_key, seqno);
 }
 
 bool RangeDelAggregator::IsRangeOverlapped(const Slice& start,
