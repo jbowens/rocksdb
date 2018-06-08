@@ -65,6 +65,15 @@ class UncollapsedRangeDelMap : public RangeDelMap {
     return false;
   }
 
+  bool ShouldDeleteRange(const Slice& start, const Slice& end,
+                         SequenceNumber seqno) {
+    // Unimplemented because the only client of this method, iteration, uses
+    // collapsed maps.
+    fprintf(stderr, "UncollapsedRangeDelMap::ShouldDeleteRange unimplemented");
+    abort();
+    return false;
+  }
+
   bool IsRangeOverlapped(const Slice& start, const Slice& end) {
     for (const auto& tombstone : rep_) {
       if (ucmp_->Compare(start, tombstone.end_key_) < 0 &&
@@ -222,6 +231,44 @@ class CollapsedRangeDelMap : public RangeDelMap {
     assert(std::next(iter_) == rep_.end() ||
            ucmp_->Compare(parsed.user_key, std::next(iter_)->first) < 0);
     return parsed.sequence < iter_->second;
+  }
+
+  bool ShouldDeleteRange(const Slice& start, const Slice& end,
+                         SequenceNumber seqno) {
+    ParsedInternalKey parsed_start;
+    if (!ParseInternalKey(start, &parsed_start)) {
+      assert(false);
+    }
+    ParsedInternalKey parsed_end;
+    if (!ParseInternalKey(end, &parsed_end)) {
+      assert(false);
+    }
+    if (ucmp_->Compare(parsed_start.user_key, parsed_end.user_key) > 0) {
+      return false;
+    }
+
+    auto iter = rep_.upper_bound(parsed_start.user_key);
+    if (iter == rep_.begin()) {
+      // before start of deletion intervals
+      return false;
+    }
+    --iter;
+    if (ucmp_->Compare(parsed_start.user_key, iter->first) < 0) {
+      return false;
+    }
+    // Loop looking for a tombstone that is older than the range
+    // sequence number, or we determine that our range is completely
+    // covered by newer tombstones.
+    for (; iter != rep_.end(); ++iter) {
+      if (ucmp_->Compare(parsed_end.user_key, iter->first) < 0) {
+        return true;
+      }
+      if (seqno >= iter->second) {
+        // Tombstone is older than range sequence number.
+        return false;
+      }
+    }
+    return false;
   }
 
   bool IsRangeOverlapped(const Slice&, const Slice&) {
@@ -407,6 +454,18 @@ bool RangeDelAggregator::ShouldDeleteImpl(const ParsedInternalKey& parsed,
     return false;
   }
   return tombstone_map.ShouldDelete(parsed, mode);
+}
+
+bool RangeDelAggregator::ShouldDeleteRange(
+    const Slice& start, const Slice& end, SequenceNumber seqno) {
+  if (rep_ == nullptr) {
+    return false;
+  }
+  auto& tombstone_map = GetRangeDelMap(seqno);
+  if (tombstone_map.IsEmpty()) {
+    return false;
+  }
+  return tombstone_map.ShouldDeleteRange(start, end, seqno);
 }
 
 bool RangeDelAggregator::IsRangeOverlapped(const Slice& start,
