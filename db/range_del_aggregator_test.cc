@@ -22,6 +22,12 @@ struct ExpectedPoint {
   bool expectAlive;
 };
 
+struct ExpectedRange {
+  Slice begin;
+  Slice end;
+  SequenceNumber seq;
+};
+
 enum Direction {
   kForward,
   kReverse,
@@ -147,6 +153,26 @@ void VerifyRangeDels(
       ASSERT_FALSE(overlapped);
     }
   }
+}
+
+bool ShouldDeleteRange(const std::vector<RangeTombstone>& range_dels,
+                       const ExpectedRange& expected_range,
+                       const InternalKeyComparator& icmp = bytewise_icmp) {
+  RangeDelAggregator range_del_agg(icmp, {} /* snapshots */, true);
+  std::vector<std::string> keys, values;
+  for (const auto& range_del : range_dels) {
+    auto key_and_value = range_del.Serialize();
+    keys.push_back(key_and_value.first.Encode().ToString());
+    values.push_back(key_and_value.second.ToString());
+  }
+  std::unique_ptr<test::VectorIterator> range_del_iter(
+      new test::VectorIterator(keys, values));
+  range_del_agg.AddTombstones(std::move(range_del_iter));
+
+  std::string begin, end;
+  AppendInternalKey(&begin, {expected_range.begin, expected_range.seq, kTypeValue});
+  AppendInternalKey(&end, {expected_range.end, expected_range.seq, kTypeValue});
+  return range_del_agg.ShouldDeleteRange(begin, end, expected_range.seq);
 }
 
 }  // anonymous namespace
@@ -462,6 +488,42 @@ TEST_F(RangeDelAggregatorTest, FileCoversOneKeyAndTombstoneBelow) {
       {{"a", 20, true}, // truncated here
        {"a", 15, true}}, // truncated
       {{"a", "a", 15}}); // empty tombstone but can't occur during a compaction
+}
+
+TEST_F(RangeDelAggregatorTest, ShouldDeleteRange) {
+  ASSERT_TRUE(ShouldDeleteRange(
+      {{"a", "c", 10}},
+      {"a", "b", 9}));
+  ASSERT_TRUE(ShouldDeleteRange(
+      {{"a", "c", 10}},
+      {"a", "a", 9}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{"a", "c", 10}},
+      {"b", "a", 9}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{"a", "c", 10}},
+      {"a", "b", 10}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{"a", "c", 10}},
+      {"a", "c", 9}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{"b", "c", 10}},
+      {"a", "b", 9}));
+  ASSERT_TRUE(ShouldDeleteRange(
+      {{"a", "b", 10}, {"b", "d", 20}},
+      {"a", "c", 9}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{"a", "b", 10}, {"b", "d", 20}},
+      {"a", "c", 15}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{"a", "b", 10}, {"c", "e", 20}},
+      {"a", "d", 9}));
+  ASSERT_TRUE(ShouldDeleteRange(
+      {{"a", "b", 10}, {"c", "e", 20}},
+      {"c", "d", 15}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{"a", "b", 10}, {"c", "e", 20}},
+      {"c", "d", 20}));
 }
 
 }  // namespace rocksdb
