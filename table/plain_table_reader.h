@@ -80,6 +80,8 @@ class PlainTableReader: public TableReader {
 
   InternalIterator* NewIterator(const ReadOptions&,
                                 const SliceTransform* prefix_extractor,
+                                RangeDelAggregator* range_del_agg = nullptr,
+                                const FileMetaData* file_meta = nullptr,
                                 Arena* arena = nullptr,
                                 bool skip_filters = false,
                                 bool for_compaction = false) override;

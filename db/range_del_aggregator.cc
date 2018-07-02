@@ -108,12 +108,11 @@ class UncollapsedRangeDelMap : public RangeDelMap {
   }
 
   RangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno) override {
-    // Unimplemented because the only client of this method, iteration, uses
-    // collapsed maps.
+    // Unimplemented, though the lack of implementation only affects
+    // performance (not correctness) for sstable ingestion. Normal
+    // read operations use a CollapsedRangeDelMap.
     (void)key;
     (void)seqno;
-    fprintf(stderr, "UncollapsedRangeDelMap::GetTombstone unimplemented");
-    abort();
     return RangeTombstone(Slice(), Slice(), 0);
   }
 
