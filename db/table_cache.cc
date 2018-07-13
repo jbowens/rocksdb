@@ -170,7 +170,7 @@ Status TableCache::FindTable(const EnvOptions& env_options,
 
 InternalIterator* TableCache::NewIterator(
     const ReadOptions& options, const EnvOptions& env_options,
-    const InternalKeyComparator& icomparator, const FileDescriptor& fd,
+    const InternalKeyComparator& icomparator, const FileMetaData& file_meta,
     RangeDelAggregator* range_del_agg, TableReader** table_reader_ptr,
     HistogramImpl* file_read_hist, bool for_compaction, Arena* arena,
     bool skip_filters, int level) {
@@ -201,6 +201,7 @@ InternalIterator* TableCache::NewIterator(
     create_new_table_reader = readahead > 0;
   }
 
+  auto& fd = file_meta.fd;
   if (create_new_table_reader) {
     unique_ptr<TableReader> table_reader_unique_ptr;
     s = GetTableReader(
@@ -229,7 +230,9 @@ InternalIterator* TableCache::NewIterator(
         !options.table_filter(*table_reader->GetTableProperties())) {
       result = NewEmptyInternalIterator(arena);
     } else {
-      result = table_reader->NewIterator(options, arena, skip_filters);
+      result = table_reader->NewIterator(
+          options, range_del_agg, nullptr /* file_meta */,
+          arena, skip_filters);
     }
     if (create_new_table_reader) {
       assert(handle == nullptr);
@@ -247,13 +250,18 @@ InternalIterator* TableCache::NewIterator(
     }
   }
   if (s.ok() && range_del_agg != nullptr && !options.ignore_range_deletions) {
-    std::unique_ptr<InternalIterator> range_del_iter(
-        table_reader->NewRangeTombstoneIterator(options));
-    if (range_del_iter != nullptr) {
-      s = range_del_iter->status();
-    }
-    if (s.ok()) {
-      s = range_del_agg->AddTombstones(std::move(range_del_iter));
+    if (range_del_agg->AddFile(fd.GetNumber())) {
+      std::unique_ptr<InternalIterator> range_del_iter(
+          table_reader->NewRangeTombstoneIterator(options));
+      if (range_del_iter != nullptr) {
+        s = range_del_iter->status();
+      }
+      if (s.ok()) {
+        s = range_del_agg->AddTombstones(
+            std::move(range_del_iter),
+            &file_meta.smallest,
+            &file_meta.largest);
+      }
     }
   }
 
@@ -267,48 +275,12 @@ InternalIterator* TableCache::NewIterator(
   return result;
 }
 
-InternalIterator* TableCache::NewRangeTombstoneIterator(
-    const ReadOptions& options, const EnvOptions& env_options,
-    const InternalKeyComparator& icomparator, const FileDescriptor& fd,
-    HistogramImpl* file_read_hist, bool skip_filters, int level) {
-  Status s;
-  Cache::Handle* handle = nullptr;
-  TableReader* table_reader = fd.table_reader;
-  if (table_reader == nullptr) {
-    s = FindTable(env_options, icomparator, fd, &handle,
-                  options.read_tier == kBlockCacheTier /* no_io */,
-                  true /* record read_stats */, file_read_hist, skip_filters,
-                  level);
-    if (s.ok()) {
-      table_reader = GetTableReaderFromHandle(handle);
-    }
-  }
-  InternalIterator* result = nullptr;
-  if (s.ok()) {
-    result = table_reader->NewRangeTombstoneIterator(options);
-    if (result != nullptr) {
-      if (handle != nullptr) {
-        result->RegisterCleanup(&UnrefEntry, cache_, handle);
-      }
-    }
-  }
-  if (result == nullptr && handle != nullptr) {
-    // the range deletion block didn't exist, or there was a failure between
-    // getting handle and getting iterator.
-    ReleaseHandle(handle);
-  }
-  if (!s.ok()) {
-    assert(result == nullptr);
-    result = NewErrorInternalIterator(s);
-  }
-  return result;
-}
-
 Status TableCache::Get(const ReadOptions& options,
                        const InternalKeyComparator& internal_comparator,
-                       const FileDescriptor& fd, const Slice& k,
+                       const FileMetaData& file_meta, const Slice& k,
                        GetContext* get_context, HistogramImpl* file_read_hist,
                        bool skip_filters, int level) {
+  auto& fd = file_meta.fd;
   std::string* row_cache_entry = nullptr;
   bool done = false;
 #ifndef ROCKSDB_LITE
@@ -389,7 +361,9 @@ Status TableCache::Get(const ReadOptions& options,
       }
       if (s.ok()) {
         s = get_context->range_del_agg()->AddTombstones(
-            std::move(range_del_iter));
+            std::move(range_del_iter),
+            &file_meta.smallest,
+            &file_meta.largest);
       }
     }
     if (s.ok()) {

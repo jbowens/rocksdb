@@ -1,4 +1,11 @@
 # Rocksdb Change Log
+## 5.13.crl (7/13/2018)
+### Public API Change
+* The "rocksdb.num.entries" table property no longer counts range deletion tombstones as entries.
+
+### New Features
+* Add a new table property, "rocksdb.num.range-deletions", which counts the number of range deletion tombstones in the table.
+
 ## 5.13.4 (6/12/2018)
 ### Bug Fixes
 * Fix regression bug of Prev() with ReadOptions.iterate_upper_bound.
