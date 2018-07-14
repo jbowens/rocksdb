@@ -94,13 +94,16 @@ class UncollapsedRangeDelMap : public RangeDelMap {
 
   bool ShouldDeleteRange(const Slice& start, const Slice& end,
                          SequenceNumber seqno) override {
-    // Unimplemented because the only client of this method, iteration, uses
-    // collapsed maps.
+    // Unimplemented, though the lack of implementation only affects
+    // performance (not correctness) for sstable ingestion. Normal read
+    // operations use a CollapsedRangeDelMap.
+    //
+    // TODO(peter): This is called from
+    // Version::OverlapWithLevelIterator. That method needs to be tested in
+    // the presence of range tombstones.
     (void)start;
     (void)end;
     (void)seqno;
-    fprintf(stderr, "UncollapsedRangeDelMap::ShouldDeleteRange unimplemented");
-    abort();
     return false;
   }
 
