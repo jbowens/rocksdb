@@ -554,6 +554,10 @@ TEST_F(RangeDelAggregatorTest, GetTombstone) {
       {"b", "d", 10});
   VerifyGetTombstone(
       {{"b", "d", 10}},
+      {"b", 10},
+      {"b", "d", 0});
+  VerifyGetTombstone(
+      {{"b", "d", 10}},
       {"b", 20},
       {"b", "d", 0});
   VerifyGetTombstone(
@@ -574,12 +578,16 @@ TEST_F(RangeDelAggregatorTest, GetTombstone) {
       {"a", "c", 10});
   VerifyGetTombstone(
       {{"a", "c", 10}, {"e", "h", 20}},
-      {"e", 9},
+      {"b", 10},
+      {"a", "c", 0});
+  VerifyGetTombstone(
+      {{"a", "c", 10}, {"e", "h", 20}},
+      {"e", 19},
       {"e", "h", 20});
   VerifyGetTombstone(
       {{"a", "c", 10}, {"e", "h", 20}},
-      {"e", 9},
-      {"e", "h", 20});
+      {"e", 20},
+      {"e", "h", 0});
 }
 
 }  // namespace rocksdb

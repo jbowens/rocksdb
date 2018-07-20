@@ -351,8 +351,11 @@ class CollapsedRangeDelMap : public RangeDelMap {
       // after end of deletion intervals
       return RangeTombstone(prev->first.user_key, Slice(), 0);
     }
+    // Note that a range tombstone does not cover a key at the same sequence
+    // number. This can occur in an sstable that has been ingested where all
+    // of the entries have the same sequence number.
     return RangeTombstone(prev->first.user_key, iter->first.user_key,
-                          prev->second >= seqno ? prev->second : 0);
+                          prev->second > seqno ? prev->second : 0);
   }
 
   bool IsRangeOverlapped(const ParsedInternalKey&,
