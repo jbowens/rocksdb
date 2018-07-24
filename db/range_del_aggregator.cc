@@ -188,7 +188,8 @@ class CollapsedRangeDelMap : public RangeDelMap {
   const Comparator* ucmp_;
 
  public:
-  CollapsedRangeDelMap(const Comparator* ucmp) : ucmp_(ucmp) {
+  CollapsedRangeDelMap(const Comparator* ucmp)
+      : rep_(stl_wrappers::LessOfComparator(ucmp)), ucmp_(ucmp) {
     InvalidatePosition();
   }
 
@@ -294,8 +295,11 @@ class CollapsedRangeDelMap : public RangeDelMap {
       // after end of deletion intervals
       return RangeTombstone(prev->first, Slice(), 0);
     }
+    // Note that a range tombstone does not cover a key at the same sequence
+    // number. This can occur in an sstable that has been ingested where all
+    // of the entries have the same sequence number.
     return RangeTombstone(prev->first, iter->first,
-                          prev->second >= seqno ? prev->second : 0);
+                          prev->second > seqno ? prev->second : 0);
   }
 
   bool IsRangeOverlapped(const Slice&, const Slice&) {
