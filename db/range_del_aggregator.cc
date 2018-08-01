@@ -177,6 +177,9 @@ class CollapsedRangeDelMap : public RangeDelMap {
     }
 
     RangeTombstone Tombstone() const override {
+      assert(Valid());
+      assert(std::next(iter_) != rep_.end());
+      assert(iter_->second != 0);
       RangeTombstone tombstone;
       tombstone.start_key_ = iter_->first;
       tombstone.end_key_ = std::next(iter_)->first;
@@ -315,7 +318,8 @@ class CollapsedRangeDelMap : public RangeDelMap {
   }
 
   void AddTombstone(RangeTombstone t) {
-    if (ucmp_->Compare(t.start_key_, t.end_key_) >= 0) {
+    if (ucmp_->Compare(t.start_key_, t.end_key_) >= 0 ||
+        t.seq_ == 0) {
       // The tombstone covers no keys. Nothing to do.
       return;
     }
