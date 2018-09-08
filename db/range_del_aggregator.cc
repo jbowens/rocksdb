@@ -107,14 +107,14 @@ class UncollapsedRangeDelMap : public RangeDelMap {
     return false;
   }
 
-  std::pair<RangePtr,SequenceNumber> GetTombstone(
-      const Slice& user_key, SequenceNumber seqno) override {
+  PartialRangeTombstone GetTombstone(const Slice& user_key,
+                                     SequenceNumber seqno) override {
     // Unimplemented, though the lack of implementation only affects
     // performance (not correctness) for sstable ingestion. Normal
     // read operations use a CollapsedRangeDelMap.
     (void)user_key;
     (void)seqno;
-    return std::make_pair(RangePtr(), 0);
+    return PartialRangeTombstone();
   }
 
   bool IsRangeOverlapped(const ParsedInternalKey& start,
@@ -329,8 +329,8 @@ class CollapsedRangeDelMap : public RangeDelMap {
     return false;
   }
 
-  std::pair<RangePtr,SequenceNumber> GetTombstone(
-      const Slice& key, SequenceNumber seqno) override {
+  PartialRangeTombstone GetTombstone(const Slice& key,
+                                     SequenceNumber seqno) override {
     ParsedInternalKey parsed_key;
     parsed_key.user_key = key;
     parsed_key.sequence = kMaxSequenceNumber;
@@ -344,19 +344,19 @@ class CollapsedRangeDelMap : public RangeDelMap {
     auto iter = rep_.upper_bound(parsed_key);
     if (iter == rep_.begin()) {
       // before start of deletion intervals
-      return std::make_pair(RangePtr(nullptr, &iter->first.user_key), 0);
+      return PartialRangeTombstone(nullptr, &iter->first.user_key, 0);
     }
     auto prev = iter;
     --prev;
     if (iter == rep_.end()) {
       // after end of deletion intervals
-      return std::make_pair(RangePtr(&prev->first.user_key, nullptr), 0);
+      return PartialRangeTombstone(&prev->first.user_key, nullptr, 0);
     }
     // Note that a range tombstone does not cover a key at the same sequence
     // number. This can occur in an sstable that has been ingested where all
     // of the entries have the same sequence number.
-    return std::make_pair(RangePtr(&prev->first.user_key, &iter->first.user_key),
-                          prev->second > seqno ? prev->second : 0);
+    return PartialRangeTombstone(&prev->first.user_key, &iter->first.user_key,
+                                 prev->second > seqno ? prev->second : 0);
   }
 
   bool IsRangeOverlapped(const ParsedInternalKey&,
@@ -590,14 +590,14 @@ bool RangeDelAggregator::ShouldDeleteRange(
   return tombstone_map.ShouldDeleteRange(start, end, seqno);
 }
 
-std::pair<RangePtr,SequenceNumber> RangeDelAggregator::GetTombstone(
-    const Slice& user_key, SequenceNumber seqno) {
+PartialRangeTombstone RangeDelAggregator::GetTombstone(const Slice& user_key,
+                                                       SequenceNumber seqno) {
   if (rep_ == nullptr) {
-    return std::make_pair(RangePtr(), 0);
+    return PartialRangeTombstone();
   }
   auto& tombstone_map = GetRangeDelMap(seqno);
   if (tombstone_map.IsEmpty()) {
-    return std::make_pair(RangePtr(), 0);
+    return PartialRangeTombstone();
   }
   return tombstone_map.GetTombstone(user_key, seqno);
 }

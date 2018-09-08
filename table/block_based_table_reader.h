@@ -546,9 +546,6 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
         icomp_(icomp),
         range_del_agg_(range_del_agg),
         file_meta_(file_meta),
-        range_tombstone_start_(nullptr),
-        range_tombstone_end_(nullptr),
-        range_tombstone_seq_(0),
         index_iter_(index_iter),
         pinned_iters_mgr_(nullptr),
         block_iter_points_to_real_block_(false),
@@ -668,13 +665,11 @@ private:
   RangeDelAggregator* const range_del_agg_;
   const FileMetaData* const file_meta_;
   // The range tombstone that covers the current key. Note that this is a
-  // cooked value, not the raw tombstone as retrieved from
+  // cooked value, not the raw partial tombstone as retrieved from
   // RangeDelAggregator::GetTombstone(). In particular, the start and end keys
   // will be nullptr to indicate the tombstone extends past the beginning or
   // end of the sstable.
-  const Slice* range_tombstone_start_;
-  const Slice* range_tombstone_end_;
-  SequenceNumber range_tombstone_seq_;
+  PartialRangeTombstone range_tombstone_;
   InternalIteratorBase<BlockHandle>* index_iter_;
   PinnedIteratorsManager* pinned_iters_mgr_;
   TBlockIter block_iter_;
