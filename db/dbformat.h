@@ -675,9 +675,9 @@ int InternalKeyComparator::CompareKeySeq(const Slice& akey,
 }
 
 // A PartialRangeTombstone represents a range tombstone whose start and end keys
-// may not exist. It is notably returned by RangeDelAggregator::GetTombstone,
+// may be infinite. It is notably returned by RangeDelAggregator::GetTombstone,
 // where a PartialRangeTombstone with a nullptr start key represents a synthetic
-// tombstone before the first real tombstone, and a PartialRangeTombstone with a
+// tombstone before the first real tombstone and a PartialRangeTombstone with a
 // nullptr end key represents a synthetic tombstone after the last real range
 // tombstone. Unlike RangeTombstones, PartialRangeTombstones are never
 // serialized and stored to disk. They exist only in memory.
