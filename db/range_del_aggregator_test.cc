@@ -448,6 +448,21 @@ TEST_F(RangeDelAggregatorTest, IsEmpty) {
   ASSERT_TRUE(range_del_agg4.IsEmpty());
 }
 
+TEST_F(RangeDelAggregatorTest, OverlappingLargestKeyTruncateTombstones) {
+  const InternalKey smallest("b", 1, kTypeRangeDeletion);
+  const InternalKey largest(
+      "e", 3,  // could happen if "e" is in consecutive sstables
+      kTypeValue);
+  VerifyRangeDels(
+      {{"a", "c", 10}, {"d", "f", 10}},
+      {{"a", 10, true},  // truncated
+       {"b", 10, false}, // not truncated
+       {"d", 10, false}, // not truncated
+       {"e", 10, false}}, // not truncated
+      {{"b", "c", 10}, {"d", "f", 10}},
+      &smallest, &largest);
+}
+
 }  // namespace rocksdb
 
 int main(int argc, char** argv) {
