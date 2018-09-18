@@ -33,7 +33,7 @@ enum Direction {
   kReverse,
 };
 
-static auto icmp = InternalKeyComparator(BytewiseComparator());
+static auto bytewise_icmp = InternalKeyComparator(BytewiseComparator());
 
 void AddTombstones(RangeDelAggregator* range_del_agg,
                    const std::vector<RangeTombstone>& range_dels,
@@ -87,8 +87,8 @@ void VerifyRangeDels(
     const std::vector<RangeTombstone>& range_dels_in,
     const std::vector<ExpectedPoint>& expected_points,
     const std::vector<RangeTombstone>& expected_collapsed_range_dels,
-    const InternalKey* smallest = nullptr,
-    const InternalKey* largest = nullptr) {
+    const InternalKey* smallest = nullptr, const InternalKey* largest = nullptr,
+    const InternalKeyComparator& icmp = bytewise_icmp) {
   // Test same result regardless of which order the range deletions are added
   // and regardless of collapsed mode.
   for (bool collapsed : {false, true}) {
@@ -156,7 +156,7 @@ void VerifyRangeDels(
 
 bool ShouldDeleteRange(const std::vector<RangeTombstone>& range_dels,
                        const ExpectedRange& expected_range) {
-  RangeDelAggregator range_del_agg(icmp, {} /* snapshots */, true);
+  RangeDelAggregator range_del_agg(bytewise_icmp, {} /* snapshots */, true);
   std::vector<std::string> keys, values;
   for (const auto& range_del : range_dels) {
     auto key_and_value = range_del.Serialize();
@@ -176,7 +176,7 @@ bool ShouldDeleteRange(const std::vector<RangeTombstone>& range_dels,
 void VerifyGetTombstone(const std::vector<RangeTombstone>& range_dels,
                         const ExpectedPoint& expected_point,
                         const PartialRangeTombstone& expected_tombstone) {
-  RangeDelAggregator range_del_agg(icmp, {} /* snapshots */, true);
+  RangeDelAggregator range_del_agg(bytewise_icmp, {} /* snapshots */, true);
   ASSERT_TRUE(range_del_agg.IsEmpty());
   std::vector<std::string> keys, values;
   for (const auto& range_del : range_dels) {
@@ -221,6 +221,14 @@ TEST_F(RangeDelAggregatorTest, OverlapAboveMiddle) {
   VerifyRangeDels({{"a", "d", 5}, {"b", "c", 10}},
                   {{" ", 0}, {"a", 5}, {"b", 10}, {"c", 5}, {"d", 0}},
                   {{"a", "b", 5}, {"b", "c", 10}, {"c", "d", 5}});
+}
+
+TEST_F(RangeDelAggregatorTest, OverlapAboveMiddleReverse) {
+  VerifyRangeDels({{"d", "a", 5}, {"c", "b", 10}},
+                  {{"z", 0}, {"d", 5}, {"c", 10}, {"b", 5}, {"a", 0}},
+                  {{"d", "c", 5}, {"c", "b", 10}, {"b", "a", 5}},
+                  nullptr /* smallest */, nullptr /* largest */,
+                  InternalKeyComparator(ReverseBytewiseComparator()));
 }
 
 TEST_F(RangeDelAggregatorTest, OverlapFully) {
@@ -318,14 +326,14 @@ TEST_F(RangeDelAggregatorTest, AlternateMultipleAboveBelow) {
 
 TEST_F(RangeDelAggregatorTest, MergingIteratorAllEmptyStripes) {
   for (bool collapsed : {true, false}) {
-    RangeDelAggregator range_del_agg(icmp, {1, 2}, collapsed);
+    RangeDelAggregator range_del_agg(bytewise_icmp, {1, 2}, collapsed);
     VerifyRangeDelIter(range_del_agg.NewIterator().get(), {});
   }
 }
 
 TEST_F(RangeDelAggregatorTest, MergingIteratorOverlappingStripes) {
   for (bool collapsed : {true, false}) {
-    RangeDelAggregator range_del_agg(icmp, {5, 15, 25, 35}, collapsed);
+    RangeDelAggregator range_del_agg(bytewise_icmp, {5, 15, 25, 35}, collapsed);
     AddTombstones(
         &range_del_agg,
         {{"d", "e", 10}, {"aa", "b", 20}, {"c", "d", 30}, {"a", "b", 10}});
@@ -336,7 +344,8 @@ TEST_F(RangeDelAggregatorTest, MergingIteratorOverlappingStripes) {
 }
 
 TEST_F(RangeDelAggregatorTest, MergingIteratorSeek) {
-  RangeDelAggregator range_del_agg(icmp, {5, 15}, true /* collapsed */);
+  RangeDelAggregator range_del_agg(bytewise_icmp, {5, 15},
+                                   true /* collapsed */);
   AddTombstones(&range_del_agg, {{"a", "c", 10},
                                  {"b", "c", 11},
                                  {"f", "g", 10},
@@ -431,7 +440,7 @@ TEST_F(RangeDelAggregatorTest, GetTombstone) {
 }
 
 TEST_F(RangeDelAggregatorTest, AddGetTombstoneInterleaved) {
-  RangeDelAggregator range_del_agg(icmp, {} /* snapshots */,
+  RangeDelAggregator range_del_agg(bytewise_icmp, {} /* snapshots */,
                                    true /* collapsed */);
   AddTombstones(&range_del_agg, {{"b", "c", 10}});
   auto tombstone = range_del_agg.GetTombstone("b", 5);
@@ -456,19 +465,19 @@ TEST_F(RangeDelAggregatorTest, TruncateTombstones) {
 TEST_F(RangeDelAggregatorTest, IsEmpty) {
   const std::vector<SequenceNumber> snapshots;
   RangeDelAggregator range_del_agg1(
-      icmp, snapshots, false /* collapse_deletions */);
+      bytewise_icmp, snapshots, false /* collapse_deletions */);
   ASSERT_TRUE(range_del_agg1.IsEmpty());
 
   RangeDelAggregator range_del_agg2(
-      icmp, snapshots, true /* collapse_deletions */);
+      bytewise_icmp, snapshots, true /* collapse_deletions */);
   ASSERT_TRUE(range_del_agg2.IsEmpty());
 
   RangeDelAggregator range_del_agg3(
-      icmp, kMaxSequenceNumber, false /* collapse_deletions */);
+      bytewise_icmp, kMaxSequenceNumber, false /* collapse_deletions */);
   ASSERT_TRUE(range_del_agg3.IsEmpty());
 
   RangeDelAggregator range_del_agg4(
-      icmp, kMaxSequenceNumber, true /* collapse_deletions */);
+      bytewise_icmp, kMaxSequenceNumber, true /* collapse_deletions */);
   ASSERT_TRUE(range_del_agg4.IsEmpty());
 }
 
