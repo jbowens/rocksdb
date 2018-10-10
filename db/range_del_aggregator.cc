@@ -50,7 +50,7 @@ class UncollapsedRangeDelMap : public RangeDelMap {
       : rep_(TombstoneStartKeyComparator(ucmp)), ucmp_(ucmp) {}
 
   bool ShouldDelete(const ParsedInternalKey& parsed,
-                    RangeDelPositioningMode mode) {
+                    RangeDelPositioningMode mode) override {
     (void)mode;
     assert(mode == RangeDelPositioningMode::kFullScan);
     for (const auto& tombstone : rep_) {
@@ -66,7 +66,7 @@ class UncollapsedRangeDelMap : public RangeDelMap {
   }
 
   bool ShouldDeleteRange(const Slice& start, const Slice& end,
-                         SequenceNumber seqno) {
+                         SequenceNumber seqno) override {
     // Unimplemented, though the lack of implementation only affects
     // performance (not correctness) for sstable ingestion. Normal read
     // operations use a CollapsedRangeDelMap.
@@ -78,7 +78,7 @@ class UncollapsedRangeDelMap : public RangeDelMap {
   }
 
   PartialRangeTombstone GetTombstone(const Slice& user_key,
-                                     SequenceNumber seqno) {
+                                     SequenceNumber seqno) override {
     // Unimplemented, though the lack of implementation only affects
     // performance (not correctness) for sstable ingestion. Normal
     // read operations use a CollapsedRangeDelMap.
@@ -87,7 +87,7 @@ class UncollapsedRangeDelMap : public RangeDelMap {
     return PartialRangeTombstone();
   }
 
-  bool IsRangeOverlapped(const Slice& start, const Slice& end) {
+  bool IsRangeOverlapped(const Slice& start, const Slice& end) override {
     for (const auto& tombstone : rep_) {
       if (ucmp_->Compare(start, tombstone.end_key_) < 0 &&
           ucmp_->Compare(tombstone.start_key_, end) <= 0 &&
@@ -98,13 +98,15 @@ class UncollapsedRangeDelMap : public RangeDelMap {
     return false;
   }
 
-  void AddTombstone(RangeTombstone tombstone) { rep_.emplace(tombstone); }
+  void AddTombstone(RangeTombstone tombstone) override {
+    rep_.emplace(tombstone);
+  }
 
-  size_t Size() const { return rep_.size(); }
+  size_t Size() const override { return rep_.size(); }
 
-  void InvalidatePosition() {}  // no-op
+  void InvalidatePosition() override {}  // no-op
 
-  std::unique_ptr<RangeDelIterator> NewIterator() {
+  std::unique_ptr<RangeDelIterator> NewIterator() override {
     return std::unique_ptr<RangeDelIterator>(new Iterator(this->rep_));
   }
 };
@@ -200,7 +202,7 @@ class CollapsedRangeDelMap : public RangeDelMap {
   }
 
   bool ShouldDelete(const ParsedInternalKey& parsed,
-                    RangeDelPositioningMode mode) {
+                    RangeDelPositioningMode mode) override {
     if (iter_ == rep_.end() &&
         (mode == RangeDelPositioningMode::kForwardTraversal ||
          mode == RangeDelPositioningMode::kBackwardTraversal)) {
@@ -252,7 +254,7 @@ class CollapsedRangeDelMap : public RangeDelMap {
   }
 
   bool ShouldDeleteRange(const Slice& start, const Slice& end,
-                         SequenceNumber seqno) {
+                         SequenceNumber seqno) override {
     ParsedInternalKey parsed_start;
     if (!ParseInternalKey(start, &parsed_start)) {
       assert(false);
@@ -291,7 +293,7 @@ class CollapsedRangeDelMap : public RangeDelMap {
   }
 
   PartialRangeTombstone GetTombstone(const Slice& user_key,
-                                     SequenceNumber seqno) {
+                                     SequenceNumber seqno) override {
     auto iter = rep_.upper_bound(user_key);
     if (iter == rep_.begin()) {
       // before start of deletion intervals
@@ -310,14 +312,14 @@ class CollapsedRangeDelMap : public RangeDelMap {
                                  prev->second > seqno ? prev->second : 0);
   }
 
-  bool IsRangeOverlapped(const Slice&, const Slice&) {
+  bool IsRangeOverlapped(const Slice&, const Slice&) override {
     // Unimplemented because the only client of this method, file ingestion,
     // uses uncollapsed maps.
     fprintf(stderr, "CollapsedRangeDelMap::IsRangeOverlapped unimplemented");
     abort();
   }
 
-  void AddTombstone(RangeTombstone t) {
+  void AddTombstone(RangeTombstone t) override {
     if (ucmp_->Compare(t.start_key_, t.end_key_) >= 0 || t.seq_ == 0) {
       // The tombstone covers no keys. Nothing to do.
       return;
@@ -455,16 +457,16 @@ class CollapsedRangeDelMap : public RangeDelMap {
     }
   }
 
-  size_t Size() const {
+  size_t Size() const override {
     if (rep_.empty()) {
       return 0;
     }
     return rep_.size() - 1;
   }
 
-  void InvalidatePosition() { iter_ = rep_.end(); }
+  void InvalidatePosition() override { iter_ = rep_.end(); }
 
-  std::unique_ptr<RangeDelIterator> NewIterator() {
+  std::unique_ptr<RangeDelIterator> NewIterator() override {
     return std::unique_ptr<RangeDelIterator>(new Iterator(this->rep_));
   }
 };
