@@ -424,7 +424,13 @@ class CollapsedRangeDelMap : public RangeDelMap {
         // identical seqno. Merge the tombstones by removing the existing
         // tombstone's start key.
         rep_.erase(it);
-      } else if ((it == rep_.end() || end_seq != it->second) && end_seq != prev_seq()) {
+      } else if (end_seq == prev_seq() || (it != rep_.end() && end_seq == it->second)) {
+        // The new tombstone is implicitly ended because its end point is
+        // contained within an existing tombstone with the same seqno:
+        //
+        //     2: ---k--N
+        //              ^
+      } else {
         // The new tombstone needs an explicit end point.
         //
         //     3:             OR   3: --G       OR   3: --G   K--
@@ -434,12 +440,6 @@ class CollapsedRangeDelMap : public RangeDelMap {
         // keys are exclusive, if there's an existing transition at t.end_key_,
         // it takes precedence over the transition that we install here.
         rep_.emplace(t.end_key_, end_seq);  // emplace is a noop if existing entry
-      } else {
-        // The new tombstone is implicitly ended because its end point is
-        // contained within an existing tombstone with the same seqno:
-        //
-        //     2: ---k--N
-        //              ^
       }
     } else {
       // The new tombstone is implicitly ended because its end point is covered
