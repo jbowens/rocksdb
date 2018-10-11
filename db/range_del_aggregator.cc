@@ -312,6 +312,7 @@ class CollapsedRangeDelMap : public RangeDelMap {
     }
     --iter;
     if (icmp_->Compare(parsed_start, iter->first) < 0) {
+      assert(false);
       return false;
     }
     // Loop looking for a tombstone that is older than the range sequence
@@ -332,30 +333,27 @@ class CollapsedRangeDelMap : public RangeDelMap {
   PartialRangeTombstone GetTombstone(const Slice& key,
                                      SequenceNumber seqno) override {
     ParsedInternalKey parsed_key;
-    parsed_key.user_key = key;
-    parsed_key.sequence = kMaxSequenceNumber;
-    parsed_key.type = kMaxValue;
-    // TODO(peter): The key parameter properly becomes a key in a future commit.
-    // if (!ParseInternalKey(key, &parsed_key)) {
-    //   assert(false);
-    //   // Fail open.
-    //   return RangeTombstone();
-    // }
+    if (!ParseInternalKey(key, &parsed_key)) {
+      assert(false);
+      // Fail open.
+      return PartialRangeTombstone();
+    }
+
     auto iter = rep_.upper_bound(parsed_key);
     if (iter == rep_.begin()) {
       // before start of deletion intervals
-      return PartialRangeTombstone(nullptr, &iter->first.user_key, 0);
+      return PartialRangeTombstone(nullptr, &iter->first, 0);
     }
     auto prev = iter;
     --prev;
     if (iter == rep_.end()) {
       // after end of deletion intervals
-      return PartialRangeTombstone(&prev->first.user_key, nullptr, 0);
+      return PartialRangeTombstone(&prev->first, nullptr, 0);
     }
     // Note that a range tombstone does not cover a key at the same sequence
     // number. This can occur in an sstable that has been ingested where all
     // of the entries have the same sequence number.
-    return PartialRangeTombstone(&prev->first.user_key, &iter->first.user_key,
+    return PartialRangeTombstone(&prev->first, &iter->first,
                                  prev->second > seqno ? prev->second : 0);
   }
 
@@ -590,7 +588,7 @@ bool RangeDelAggregator::ShouldDeleteRange(
   return tombstone_map.ShouldDeleteRange(start, end, seqno);
 }
 
-PartialRangeTombstone RangeDelAggregator::GetTombstone(const Slice& user_key,
+PartialRangeTombstone RangeDelAggregator::GetTombstone(const Slice& key,
                                                        SequenceNumber seqno) {
   if (rep_ == nullptr) {
     return PartialRangeTombstone();
@@ -599,7 +597,7 @@ PartialRangeTombstone RangeDelAggregator::GetTombstone(const Slice& user_key,
   if (tombstone_map.IsEmpty()) {
     return PartialRangeTombstone();
   }
-  return tombstone_map.GetTombstone(user_key, seqno);
+  return tombstone_map.GetTombstone(key, seqno);
 }
 
 bool RangeDelAggregator::IsRangeOverlapped(const Slice& start,
