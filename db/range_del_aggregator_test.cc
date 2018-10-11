@@ -66,12 +66,16 @@ void VerifyPartialTombstonesEq(const PartialRangeTombstone& a,
                                const PartialRangeTombstone& b) {
   ASSERT_EQ(a.seq(), b.seq());
   if (a.start_key() != nullptr) {
-    ASSERT_EQ(*a.start_key(), *b.start_key());
+    ASSERT_EQ(a.start_key()->user_key, b.start_key()->user_key);
+    ASSERT_EQ(a.start_key()->sequence, b.start_key()->sequence);
+    ASSERT_EQ(a.start_key()->type, b.start_key()->type);
   } else {
     ASSERT_EQ(b.start_key(), nullptr);
   }
   if (a.end_key() != nullptr) {
-    ASSERT_EQ(*a.end_key(), *b.end_key());
+    ASSERT_EQ(a.end_key()->user_key, b.end_key()->user_key);
+    ASSERT_EQ(a.end_key()->sequence, b.end_key()->sequence);
+    ASSERT_EQ(a.end_key()->type, b.end_key()->type);
   } else {
     ASSERT_EQ(b.end_key(), nullptr);
   }
@@ -170,18 +174,11 @@ void VerifyRangeDels(
   }
 }
 
-bool ShouldDeleteRange(const std::vector<RangeTombstone>& range_dels,
+bool ShouldDeleteRange(const AddTombstonesArgs& range_dels,
                        const ExpectedRange& expected_range) {
   RangeDelAggregator range_del_agg(bytewise_icmp, {} /* snapshots */, true);
-  std::vector<std::string> keys, values;
-  for (const auto& range_del : range_dels) {
-    auto key_and_value = range_del.Serialize();
-    keys.push_back(key_and_value.first.Encode().ToString());
-    values.push_back(key_and_value.second.ToString());
-  }
-  std::unique_ptr<test::VectorIterator> range_del_iter(
-      new test::VectorIterator(keys, values));
-  range_del_agg.AddTombstones(std::move(range_del_iter));
+  AddTombstones(&range_del_agg, range_dels.tombstones,
+                range_dels.smallest, range_dels.largest);
 
   std::string begin, end;
   AppendInternalKey(&begin, {expected_range.begin, expected_range.seq, kTypeValue});
@@ -189,22 +186,16 @@ bool ShouldDeleteRange(const std::vector<RangeTombstone>& range_dels,
   return range_del_agg.ShouldDeleteRange(begin, end, expected_range.seq);
 }
 
-void VerifyGetTombstone(const std::vector<RangeTombstone>& range_dels,
+void VerifyGetTombstone(const AddTombstonesArgs& range_dels,
                         const ExpectedPoint& expected_point,
                         const PartialRangeTombstone& expected_tombstone) {
   RangeDelAggregator range_del_agg(bytewise_icmp, {} /* snapshots */, true);
   ASSERT_TRUE(range_del_agg.IsEmpty());
-  std::vector<std::string> keys, values;
-  for (const auto& range_del : range_dels) {
-    auto key_and_value = range_del.Serialize();
-    keys.push_back(key_and_value.first.Encode().ToString());
-    values.push_back(key_and_value.second.ToString());
-  }
-  std::unique_ptr<test::VectorIterator> range_del_iter(
-      new test::VectorIterator(keys, values));
-  range_del_agg.AddTombstones(std::move(range_del_iter));
+  AddTombstones(&range_del_agg, range_dels.tombstones,
+                range_dels.smallest, range_dels.largest);
 
-  auto tombstone = range_del_agg.GetTombstone(expected_point.begin, expected_point.seq);
+  auto key = InternalKey(expected_point.begin, kMaxSequenceNumber, kTypeValue);
+  auto tombstone = range_del_agg.GetTombstone(key.Encode(), expected_point.seq);
   VerifyPartialTombstonesEq(expected_tombstone, tombstone);
 }
 
@@ -395,62 +386,99 @@ TEST_F(RangeDelAggregatorTest, MergingIteratorSeek) {
 }
 
 TEST_F(RangeDelAggregatorTest, ShouldDeleteRange) {
+  const InternalKey b8("b", 8, kTypeValue);
+  const InternalKey b9("b", 9, kTypeValue);
+  const InternalKey b10("b", 10, kTypeValue);
+  const InternalKey c9("c", 9, kTypeValue);
+  const InternalKey c10("c", 10, kTypeValue);
+
   ASSERT_TRUE(ShouldDeleteRange(
-      {{"a", "c", 10}},
+      {{{"a", "c", 10}}},
       {"a", "b", 9}));
   ASSERT_TRUE(ShouldDeleteRange(
-      {{"a", "c", 10}},
+      {{{"a", "c", 10}}, nullptr, &b9},
+      {"a", "b", 9}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{{"a", "c", 10}}, nullptr, &b10},
+      {"a", "b", 9}));
+  ASSERT_TRUE(ShouldDeleteRange(
+      {{{"a", "c", 10}}},
       {"a", "a", 9}));
   ASSERT_FALSE(ShouldDeleteRange(
-      {{"a", "c", 10}},
+      {{{"a", "c", 10}}},
       {"b", "a", 9}));
   ASSERT_FALSE(ShouldDeleteRange(
-      {{"a", "c", 10}},
+      {{{"a", "c", 10}}},
       {"a", "b", 10}));
   ASSERT_FALSE(ShouldDeleteRange(
-      {{"a", "c", 10}},
+      {{{"a", "c", 10}}},
       {"a", "c", 9}));
   ASSERT_FALSE(ShouldDeleteRange(
-      {{"b", "c", 10}},
+      {{{"b", "c", 10}}},
       {"a", "b", 9}));
   ASSERT_TRUE(ShouldDeleteRange(
-      {{"a", "b", 10}, {"b", "d", 20}},
+      {{{"a", "b", 10}, {"b", "d", 20}}},
+      {"a", "c", 9}));
+  ASSERT_TRUE(ShouldDeleteRange(
+      {{{"a", "b", 10}, {"b", "d", 20}}, nullptr, &c9},
       {"a", "c", 9}));
   ASSERT_FALSE(ShouldDeleteRange(
-      {{"a", "b", 10}, {"b", "d", 20}},
+      {{{"a", "b", 10}, {"b", "d", 20}}, nullptr, &c10},
+      {"a", "c", 9}));
+  ASSERT_TRUE(ShouldDeleteRange(
+      {{{"a", "b", 10}, {"b", "d", 20}}, &b9, nullptr},
+      {"b", "c", 9}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{{"a", "b", 10}, {"b", "d", 20}}, &b8, nullptr},
+      {"b", "c", 9}));
+  ASSERT_FALSE(ShouldDeleteRange(
+      {{{"a", "b", 10}, {"b", "d", 20}}},
       {"a", "c", 15}));
   ASSERT_FALSE(ShouldDeleteRange(
-      {{"a", "b", 10}, {"c", "e", 20}},
+      {{{"a", "b", 10}, {"c", "e", 20}}},
       {"a", "d", 9}));
   ASSERT_TRUE(ShouldDeleteRange(
-      {{"a", "b", 10}, {"c", "e", 20}},
+      {{{"a", "b", 10}, {"c", "e", 20}}},
       {"c", "d", 15}));
   ASSERT_FALSE(ShouldDeleteRange(
-      {{"a", "b", 10}, {"c", "e", 20}},
+      {{{"a", "b", 10}, {"c", "e", 20}}},
       {"c", "d", 20}));
 }
 
 TEST_F(RangeDelAggregatorTest, GetTombstone) {
-  Slice a = "a", b = "b", c = "c", d = "d", e = "e", h = "h";
-  VerifyGetTombstone({{"b", "d", 10}}, {"b", 9},
+  const ParsedInternalKey a = {"a", kMaxSequenceNumber, kMaxValue};
+  const ParsedInternalKey b = {"b", kMaxSequenceNumber, kMaxValue};
+  const ParsedInternalKey b10 = {"b", 10, kMaxValue};
+  const InternalKey ib10("b", 10, kTypeValue);
+  const ParsedInternalKey c = {"c", kMaxSequenceNumber, kMaxValue};
+  const ParsedInternalKey c8 = {"c", 8, kMaxValue};
+  const InternalKey ic9("c", 9, kTypeValue);
+  const ParsedInternalKey d = {"d", kMaxSequenceNumber, kMaxValue};
+  const ParsedInternalKey e = {"e", kMaxSequenceNumber, kMaxValue};
+  const ParsedInternalKey h = {"h", kMaxSequenceNumber, kMaxValue};
+  VerifyGetTombstone({{{"b", "d", 10}}}, {"b", 9},
                      PartialRangeTombstone(&b, &d, 10));
-  VerifyGetTombstone({{"b", "d", 10}}, {"b", 10},
+  VerifyGetTombstone({{{"b", "d", 10}}, nullptr, &ic9}, {"b", 9},
+                     PartialRangeTombstone(&b, &c8, 10));
+  VerifyGetTombstone({{{"a", "d", 10}}, &ib10, nullptr}, {"c", 9},
+                     PartialRangeTombstone(&b10, &d, 10));
+  VerifyGetTombstone({{{"b", "d", 10}}}, {"b", 10},
                      PartialRangeTombstone(&b, &d, 0));
-  VerifyGetTombstone({{"b", "d", 10}}, {"b", 20},
+  VerifyGetTombstone({{{"b", "d", 10}}}, {"b", 20},
                      PartialRangeTombstone(&b, &d, 0));
-  VerifyGetTombstone({{"b", "d", 10}}, {"a", 9},
+  VerifyGetTombstone({{{"b", "d", 10}}}, {"a", 9},
                      PartialRangeTombstone(nullptr, &b, 0));
-  VerifyGetTombstone({{"b", "d", 10}}, {"d", 9},
+  VerifyGetTombstone({{{"b", "d", 10}}}, {"d", 9},
                      PartialRangeTombstone(&d, nullptr, 0));
-  VerifyGetTombstone({{"a", "c", 10}, {"e", "h", 20}}, {"d", 9},
+  VerifyGetTombstone({{{"a", "c", 10}, {"e", "h", 20}}}, {"d", 9},
                      PartialRangeTombstone(&c, &e, 0));
-  VerifyGetTombstone({{"a", "c", 10}, {"e", "h", 20}}, {"b", 9},
+  VerifyGetTombstone({{{"a", "c", 10}, {"e", "h", 20}}}, {"b", 9},
                      PartialRangeTombstone(&a, &c, 10));
-  VerifyGetTombstone({{"a", "c", 10}, {"e", "h", 20}}, {"b", 10},
+  VerifyGetTombstone({{{"a", "c", 10}, {"e", "h", 20}}}, {"b", 10},
                      PartialRangeTombstone(&a, &c, 0));
-  VerifyGetTombstone({{"a", "c", 10}, {"e", "h", 20}}, {"e", 19},
+  VerifyGetTombstone({{{"a", "c", 10}, {"e", "h", 20}}}, {"e", 19},
                      PartialRangeTombstone(&e, &h, 20));
-  VerifyGetTombstone({{"a", "c", 10}, {"e", "h", 20}}, {"e", 20},
+  VerifyGetTombstone({{{"a", "c", 10}, {"e", "h", 20}}}, {"e", 20},
                      PartialRangeTombstone(&e, &h, 0));
 }
 
@@ -458,9 +486,11 @@ TEST_F(RangeDelAggregatorTest, AddGetTombstoneInterleaved) {
   RangeDelAggregator range_del_agg(bytewise_icmp, {} /* snapshots */,
                                    true /* collapsed */);
   AddTombstones(&range_del_agg, {{"b", "c", 10}});
-  auto tombstone = range_del_agg.GetTombstone("b", 5);
+  auto key = InternalKey("b", kMaxSequenceNumber, kTypeValue);
+  auto tombstone = range_del_agg.GetTombstone(key.Encode(), 5);
   AddTombstones(&range_del_agg, {{"a", "d", 20}});
-  Slice b = "b", c = "c";
+  ParsedInternalKey b = {"b", kMaxSequenceNumber, kMaxValue};
+  ParsedInternalKey c {"c", kMaxSequenceNumber, kMaxValue};
   VerifyPartialTombstonesEq(PartialRangeTombstone(&b, &c, 10), tombstone);
 }
 
