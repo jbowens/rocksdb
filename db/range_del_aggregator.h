@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <list>
 #include <map>
 #include <set>
 #include <string>
@@ -39,6 +40,35 @@ enum class RangeDelPositioningMode {
   kBinarySearch,
 };
 
+// TruncatedRangeTombstones are a slight generalization of regular
+// RangeTombstones that can represent truncations caused by SST boundaries.
+// Instead of using user keys to represent the start and end keys, they instead
+// use internal keys, whose sequence number indicates the sequence number of
+// the smallest/largest SST key (in the case where a tombstone is untruncated,
+// the sequence numbers will be kMaxSequenceNumber for both start and end
+// keys). Like RangeTombstones, TruncatedRangeTombstone are also
+// end-key-exclusive.
+struct TruncatedRangeTombstone {
+  TruncatedRangeTombstone(const ParsedInternalKey& sk,
+                          const ParsedInternalKey& ek, SequenceNumber s)
+      : start_key_(sk), end_key_(ek), seq_(s) {}
+
+  RangeTombstone Tombstone() const {
+    // The RangeTombstone returned here can cover less than the
+    // TruncatedRangeTombstone when its end key has a seqnum that is not
+    // kMaxSequenceNumber. Since this method is only used by RangeDelIterators
+    // (which in turn are only used during flush/compaction), we avoid this
+    // problem by using truncation boundaries spanning multiple SSTs, which
+    // are selected in a way that guarantee a clean break at the end key.
+    assert(end_key_.sequence == kMaxSequenceNumber);
+    return RangeTombstone(start_key_.user_key, end_key_.user_key, seq_);
+  }
+
+  ParsedInternalKey start_key_;
+  ParsedInternalKey end_key_;
+  SequenceNumber seq_;
+};
+
 // A RangeDelIterator iterates over range deletion tombstones.
 class RangeDelIterator {
  public:
@@ -46,7 +76,9 @@ class RangeDelIterator {
 
   virtual bool Valid() const = 0;
   virtual void Next() = 0;
+  // NOTE: the Slice passed to this method must be a user key.
   virtual void Seek(const Slice& target) = 0;
+  virtual void Seek(const ParsedInternalKey& target) = 0;
   virtual RangeTombstone Tombstone() const = 0;
 };
 
@@ -63,15 +95,16 @@ class RangeDelMap {
                             RangeDelPositioningMode mode) = 0;
   virtual bool ShouldDeleteRange(const Slice& start, const Slice& end,
                                  SequenceNumber seqno) = 0;
-  virtual PartialRangeTombstone GetTombstone(const Slice& user_key,
+  virtual PartialRangeTombstone GetTombstone(const Slice& key,
                                              SequenceNumber seqno) = 0;
-  virtual bool IsRangeOverlapped(const Slice& start, const Slice& end) = 0;
+  virtual bool IsRangeOverlapped(const ParsedInternalKey& start,
+                                 const ParsedInternalKey& end) = 0;
   virtual void InvalidatePosition() = 0;
 
   virtual size_t Size() const = 0;
   bool IsEmpty() const { return Size() == 0; }
 
-  virtual void AddTombstone(RangeTombstone tombstone) = 0;
+  virtual void AddTombstone(TruncatedRangeTombstone tombstone) = 0;
   virtual std::unique_ptr<RangeDelIterator> NewIterator() = 0;
 };
 
@@ -109,7 +142,7 @@ class RangeDelAggregator {
   // covered by a range tombstone residing in the same snapshot stripe.
   // @param mode If collapse_deletions_ is true, this dictates how we will find
   //             the deletion whose interval contains this key. Otherwise, its
-  //             value must be kFullScan indicating linear scan from beginning..
+  //             value must be kFullScan indicating linear scan from beginning.
   bool ShouldDelete(
       const ParsedInternalKey& parsed,
       RangeDelPositioningMode mode = RangeDelPositioningMode::kFullScan) {
@@ -138,11 +171,11 @@ class RangeDelAggregator {
   bool ShouldDeleteRange(const Slice& start, const Slice& end,
                          SequenceNumber seqno);
 
-  // Get the range tombstone at the specified user_key and sequence number. A
-  // valid tombstone is always returned, though it may cover an empty range of
-  // keys or the sequence number may be 0 to indicate that no tombstone covers
-  // the specified key.
-  PartialRangeTombstone GetTombstone(const Slice& user_key,
+  // Get the range tombstone at the specified internal key and sequence
+  // number. A valid tombstone is always returned, though it may cover an
+  // empty range of keys or the sequence number may be 0 to indicate that no
+  // tombstone covers the specified key.
+  PartialRangeTombstone GetTombstone(const Slice& key,
                                      SequenceNumber seqno);
 
   // Checks whether range deletions cover any keys between `start` and `end`,
@@ -191,6 +224,7 @@ class RangeDelAggregator {
   struct Rep {
     StripeMap stripe_map_;
     PinnedIteratorsManager pinned_iters_mgr_;
+    std::list<std::string> pinned_slices_;
     std::set<uint64_t> added_files_;
   };
   // Initializes rep_ lazily. This aggregator object is constructed for every
