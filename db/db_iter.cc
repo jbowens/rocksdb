@@ -1014,7 +1014,7 @@ bool DBIter::FindValueForCurrentKeyUsingSeek() {
       user_comparator_->Equal(ikey.user_key, saved_key_.GetUserKey()) &&
       ikey.type == kTypeMerge &&
       !range_del_agg_.ShouldDelete(
-          ikey, RangeDelPositioningMode::kBackwardTraversal)) {
+          ikey, RangeDelPositioningMode::kForwardTraversal)) {
     merge_context_.PushOperand(iter_->value(),
                                iter_->IsValuePinned() /* operand_pinned */);
     PERF_COUNTER_ADD(internal_merge_count, 1);
@@ -1027,7 +1027,7 @@ bool DBIter::FindValueForCurrentKeyUsingSeek() {
       !user_comparator_->Equal(ikey.user_key, saved_key_.GetUserKey()) ||
       ikey.type == kTypeDeletion || ikey.type == kTypeSingleDeletion ||
       range_del_agg_.ShouldDelete(
-          ikey, RangeDelPositioningMode::kBackwardTraversal)) {
+          ikey, RangeDelPositioningMode::kForwardTraversal)) {
     s = MergeHelper::TimedFullMerge(merge_operator_, saved_key_.GetUserKey(),
                                     nullptr, merge_context_.GetOperands(),
                                     &saved_value_, logger_, statistics_, env_,
