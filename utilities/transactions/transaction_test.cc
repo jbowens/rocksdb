@@ -2606,7 +2606,6 @@ TEST_P(TransactionTest, ColumnFamiliesTest) {
 TEST_P(TransactionTest, ColumnFamiliesTest2) {
   WriteOptions write_options;
   ReadOptions read_options, snapshot_read_options;
-  TransactionOptions txn_options;
   string value;
   Status s;
 
@@ -3146,7 +3145,6 @@ TEST_P(TransactionTest, Rollback) {
 TEST_P(TransactionTest, LockLimitTest) {
   WriteOptions write_options;
   ReadOptions read_options, snapshot_read_options;
-  TransactionOptions txn_options;
   string value;
   Status s;
 
@@ -3252,7 +3250,6 @@ TEST_P(TransactionTest, LockLimitTest) {
 TEST_P(TransactionTest, IteratorTest) {
   WriteOptions write_options;
   ReadOptions read_options, snapshot_read_options;
-  TransactionOptions txn_options;
   string value;
   Status s;
 
@@ -3433,7 +3430,6 @@ TEST_P(TransactionTest, DisableIndexingTest) {
 TEST_P(TransactionTest, SavepointTest) {
   WriteOptions write_options;
   ReadOptions read_options, snapshot_read_options;
-  TransactionOptions txn_options;
   string value;
   Status s;
 
@@ -4688,7 +4684,6 @@ TEST_P(TransactionTest, ClearSnapshotTest) {
 TEST_P(TransactionTest, ToggleAutoCompactionTest) {
   Status s;
 
-  TransactionOptions txn_options;
   ColumnFamilyHandle *cfa, *cfb;
   ColumnFamilyOptions cf_options;
 
