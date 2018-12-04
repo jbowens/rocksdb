@@ -19,10 +19,8 @@ namespace rocksdb {
 #ifdef __FreeBSD__
 #include <malloc_np.h>
 #else
+#define JEMALLOC_MANGLE
 #include "jemalloc/jemalloc.h"
-#ifdef JEMALLOC_NO_RENAME
-#define malloc_stats_print je_malloc_stats_print
-#endif
 #endif
 
 typedef struct {
