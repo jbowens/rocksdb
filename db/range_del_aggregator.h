@@ -95,8 +95,8 @@ class RangeDelMap {
                             RangeDelPositioningMode mode) = 0;
   virtual bool ShouldDeleteRange(const Slice& start, const Slice& end,
                                  SequenceNumber seqno) = 0;
-  virtual RangeTombstone GetTombstone(const Slice& key,
-                                      SequenceNumber seqno) = 0;
+  virtual PartialRangeTombstone GetTombstone(const Slice& key,
+                                             SequenceNumber seqno) = 0;
   virtual bool IsRangeOverlapped(const ParsedInternalKey& start,
                                  const ParsedInternalKey& end) = 0;
   virtual void InvalidatePosition() = 0;
@@ -174,9 +174,9 @@ class RangeDelAggregator {
   // Get the range tombstone at the specified internal key and sequence
   // number. A valid tombstone is always returned, though it may cover an
   // empty range of keys or the sequence number may be 0 to indicate that no
-  // tombstone covers the specified key.  
-  RangeTombstone GetTombstone(const Slice& key,
-                              SequenceNumber seqno);
+  // tombstone covers the specified key.
+  PartialRangeTombstone GetTombstone(const Slice& key,
+                                     SequenceNumber seqno);
 
   // Checks whether range deletions cover any keys between `start` and `end`,
   // inclusive.

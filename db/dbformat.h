@@ -674,5 +674,62 @@ int InternalKeyComparator::CompareKeySeq(const Slice& akey,
   return r;
 }
 
+// A PartialRangeTombstone represents a range tombstone whose start and end keys
+// may be infinite. It is notably returned by RangeDelAggregator::GetTombstone,
+// where a PartialRangeTombstone with a nullptr start key represents a synthetic
+// tombstone before the first real tombstone and a PartialRangeTombstone with a
+// nullptr end key represents a synthetic tombstone after the last real range
+// tombstone. Unlike RangeTombstones, PartialRangeTombstones are never
+// serialized and stored to disk. They exist only in memory.
+//
+// start_key and end_key are set and retrieved with type Slice*, but
+// PartialRangeTombstone makes its own copy of the pointed-to Slices, if they
+// are not nullptr. It is therefore safe for a PartialRangeTombstone to outlive
+// the Slices it is constructed with. Note, however, that it does not make a
+// copy of the actual data pointed to by the Slices.
+class PartialRangeTombstone {
+ public:
+  PartialRangeTombstone()
+      : start_key_valid_(false), end_key_valid_(false), seq_(0) {}
+
+  PartialRangeTombstone(const ParsedInternalKey* sk,
+                        const ParsedInternalKey* ek,
+                        SequenceNumber sq)
+      : seq_(sq) {
+    SetStartKey(sk);
+    SetEndKey(ek);
+  }
+
+  void SetStartKey(const ParsedInternalKey* sk) {
+    if (sk != nullptr) {
+      start_key_ = *sk;
+      start_key_valid_ = true;
+    } else {
+      start_key_valid_ = false;
+    }
+  }
+
+  void SetEndKey(const ParsedInternalKey* ek) {
+    if (ek != nullptr) {
+      end_key_ = *ek;
+      end_key_valid_ = true;
+    } else {
+      end_key_valid_ = false;
+    }
+  }
+
+  const ParsedInternalKey* start_key() const {
+    return start_key_valid_ ? &start_key_ : nullptr;
+  }
+  const ParsedInternalKey* end_key() const { return end_key_valid_ ? &end_key_ : nullptr; }
+  SequenceNumber seq() const { return seq_; }
+
+ private:
+  ParsedInternalKey start_key_;
+  ParsedInternalKey end_key_;
+  bool start_key_valid_;
+  bool end_key_valid_;
+  SequenceNumber seq_;
+};
 
 }  // namespace rocksdb
