@@ -1,5 +1,8 @@
 # Rocksdb Change Log
 
+### Bug Fixes
+* Fix flush's/compaction's merge processing logic which allowed `Put`s covered by range tombstones to reappear. Note `Put`s may exist even if the user only ever called `Merge()` due to an internal conversion during compaction to the bottommost level.
+
 # 5.17.2 (10/24/2018)
 ### Bug Fixes
 * Fix the bug that WriteBatchWithIndex's SeekForPrev() doesn't see the entries with the same key.
