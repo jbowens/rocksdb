@@ -20,6 +20,12 @@ class RangeDelAggregatorTest : public testing::Test {};
 
 namespace {
 
+struct ExpectedRange {
+  Slice begin;
+  Slice end;
+  SequenceNumber seq;
+};
+
 static auto bytewise_icmp = InternalKeyComparator(BytewiseComparator());
 
 std::unique_ptr<InternalIterator> MakeRangeDelIter(
@@ -62,6 +68,13 @@ struct TruncatedIterSeekTestCase {
 
 struct ShouldDeleteTestCase {
   ParsedInternalKey lookup_key;
+  bool result;
+};
+
+struct ShouldDeleteRangeTestCase {
+  ParsedInternalKey start;
+  ParsedInternalKey end;
+  SequenceNumber seqno;
   bool result;
 };
 
@@ -154,6 +167,26 @@ void VerifyShouldDelete(RangeDelAggregator* range_del_agg,
         test_case.result,
         range_del_agg->ShouldDelete(
             test_case.lookup_key, RangeDelPositioningMode::kBackwardTraversal));
+  }
+}
+
+void VerifyShouldDeleteRange(
+    ReadRangeDelAggregator* range_del_agg,
+    const std::vector<ShouldDeleteRangeTestCase>& test_cases) {
+  for (const auto& test_case : test_cases) {
+    std::string start, end;
+    AppendInternalKey(&start, test_case.start);
+    AppendInternalKey(&end, test_case.end);
+    EXPECT_EQ(test_case.result,
+              range_del_agg->ShouldDeleteRange(start, end, test_case.seqno));
+  }
+  for (auto it = test_cases.rbegin(); it != test_cases.rend(); ++it) {
+    const auto& test_case = *it;
+    std::string start, end;
+    AppendInternalKey(&start, test_case.start);
+    AppendInternalKey(&end, test_case.end);
+    EXPECT_EQ(test_case.result,
+              range_del_agg->ShouldDeleteRange(start, end, test_case.seqno));
   }
 }
 
@@ -360,6 +393,28 @@ TEST_F(RangeDelAggregatorTest, SingleIterInAggregator) {
                                       {InternalValue("e", 7), true},
                                       {InternalValue("g", 7), false}});
 
+  // Since there's no truncation, the tombstones are valid over the range
+  // [a@kMaxSequenceNumber,kTypeRangeDeletion,
+  //  g@kMaxSequenceNumber,kTypeRangeDeletion).
+  // Note the final case [a@10,kTypeValue, g@kMaxSequenceNumber,kTypeValue) is
+  // false since kTypeValue (0x1) comes after kTypeRangeDeletion (0xF) due to
+  // descending order of value types.
+  VerifyShouldDeleteRange(
+      &range_del_agg,
+      {
+          {InternalValue("a", kMaxSequenceNumber), InternalValue("a", 10), 9,
+           true},
+          {InternalValue("a", 10), InternalValue("a", 10), 9, true},
+          {InternalValue("a", 10), InternalValue("a", 10), 10, false},
+          {InternalValue("b", 10), InternalValue("a", 10), 9, false},
+          {InternalValue("a", 10), InternalValue("d", 0), 9, true},
+          {InternalValue("a", 10), InternalValue("e", kMaxSequenceNumber), 9,
+           false},
+          {InternalValue("a", 10), InternalValue("e", 0), 7, true},
+          {InternalValue("a", 10), InternalValue("g", kMaxSequenceNumber), 7,
+           false},
+      });
+
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
                                            {"_", "a", true},
                                            {"a", "c", true},
@@ -390,6 +445,18 @@ TEST_F(RangeDelAggregatorTest, MultipleItersInAggregator) {
                                       {InternalValue("i", 24), false},
                                       {InternalValue("ii", 14), true},
                                       {InternalValue("j", 14), false}});
+
+  VerifyShouldDeleteRange(
+      &range_del_agg, {
+                          {InternalValue("a", kMaxSequenceNumber),
+                           InternalValue("fz", 0), 7, true},
+                          {InternalValue("a", kMaxSequenceNumber),
+                           InternalValue("fz", 0), 8, false},
+                          {InternalValue("a", kMaxSequenceNumber),
+                           InternalValue("g", kMaxSequenceNumber), 7, false},
+                          {InternalValue("h", kMaxSequenceNumber),
+                           InternalValue("hi", kMaxSequenceNumber), 24, true},
+                      });
 
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
                                            {"_", "a", true},
@@ -422,6 +489,18 @@ TEST_F(RangeDelAggregatorTest, MultipleItersInAggregatorWithUpperBound) {
                                       {InternalValue("i", 24), false},
                                       {InternalValue("ii", 14), true},
                                       {InternalValue("j", 14), false}});
+
+  VerifyShouldDeleteRange(
+      &range_del_agg, {
+                          {InternalValue("a", kMaxSequenceNumber),
+                           InternalValue("fz", 0), 7, true},
+                          {InternalValue("a", kMaxSequenceNumber),
+                           InternalValue("fz", 0), 8, false},
+                          {InternalValue("a", kMaxSequenceNumber),
+                           InternalValue("g", kMaxSequenceNumber), 7, false},
+                          {InternalValue("h", kMaxSequenceNumber),
+                           InternalValue("hi", kMaxSequenceNumber), 24, false},
+                      });
 
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
                                            {"_", "a", true},
@@ -461,6 +540,22 @@ TEST_F(RangeDelAggregatorTest, MultipleTruncatedItersInAggregator) {
                                       {InternalValue("x", 9), false},
                                       {InternalValue("x", 5), true},
                                       {InternalValue("z", 9), false}});
+
+  VerifyShouldDeleteRange(
+      &range_del_agg,
+      {
+          {InternalValue("a", kMaxSequenceNumber), InternalValue("l", 0), 9,
+           false},
+          {InternalValue("a", 4), InternalValue("l", 0), 9, true},
+          {InternalValue("b", kMaxSequenceNumber), InternalValue("l", 0), 9,
+           true},
+          {InternalValue("a", 4), InternalValue("m", kMaxSequenceNumber), 9,
+           false},
+          {InternalValue("m", 20), InternalValue("w", 0), 9, true},
+          {InternalValue("x", 5), InternalValue("yz", 0), 9, true},
+          {InternalValue("x", 5), InternalValue("z", kMaxSequenceNumber), 9,
+           false},
+      });
 
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
                                            {"_", "a", true},

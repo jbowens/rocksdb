@@ -113,6 +113,9 @@ class ForwardRangeDelIterator {
   explicit ForwardRangeDelIterator(const InternalKeyComparator* icmp);
 
   bool ShouldDelete(const ParsedInternalKey& parsed);
+  bool ShouldDeleteRange(const ParsedInternalKey& parsed_start,
+                         const ParsedInternalKey& parsed_end,
+                         SequenceNumber seqno);
   void Invalidate();
 
   void AddNewIter(TruncatedRangeDelIterator* iter,
@@ -139,6 +142,10 @@ class ForwardRangeDelIterator {
 
     const InternalKeyComparator* icmp;
   };
+
+  // Moves the iterators forwards until they are at the first range tombstone
+  // ending after `parsed`.
+  void AdvanceTo(const ParsedInternalKey& parsed);
 
   void PushIter(TruncatedRangeDelIterator* iter,
                 const ParsedInternalKey& parsed) {
@@ -291,6 +298,9 @@ class RangeDelAggregator {
   virtual bool ShouldDelete(const ParsedInternalKey& parsed,
                             RangeDelPositioningMode mode) = 0;
 
+  virtual bool ShouldDeleteRange(const Slice& start, const Slice& end,
+                                 SequenceNumber seqno) = 0;
+
   virtual void InvalidateRangeDelMapPositions() = 0;
 
   virtual bool IsEmpty() const = 0;
@@ -318,6 +328,17 @@ class RangeDelAggregator {
 
     bool ShouldDelete(const ParsedInternalKey& parsed,
                       RangeDelPositioningMode mode);
+
+    // Returns true if one or more tombstones that are newer than seqno fully
+    // cover the range [start,end] (both endpoints are inclusive). Beware the
+    // inclusive endpoint which differs from most other key ranges, but matches
+    // the largest_key metadata for an sstable.
+    //
+    // False negatives are possible, so this function should only be used in
+    // certain situations, like where a positive result enables an optimization
+    // and a negative result triggers the slow path.
+    bool ShouldDeleteRange(const Slice& start, const Slice& end,
+                           SequenceNumber seqno);
 
     void Invalidate() {
       InvalidateForwardIter();
@@ -371,6 +392,17 @@ class ReadRangeDelAggregator final : public RangeDelAggregator {
     return ShouldDeleteImpl(parsed, mode);
   }
 
+  // Returns true if one or more tombstones that are newer than seqno fully
+  // cover the range [start,end] (both endpoints are inclusive). Beware the
+  // inclusive endpoint which differs from most other key ranges, but matches
+  // the largest_key metadata for an sstable.
+  //
+  // False negatives are possible, so this function should only be used in
+  // certain situations, like where a positive result enables an optimization
+  // and a negative result triggers the slow path.
+  bool ShouldDeleteRange(const Slice& start, const Slice& end,
+                         SequenceNumber seqno) override;
+
   bool IsRangeOverlapped(const Slice& start, const Slice& end);
 
   void InvalidateRangeDelMapPositions() override { rep_.Invalidate(); }
@@ -399,6 +431,9 @@ class CompactionRangeDelAggregator : public RangeDelAggregator {
   using RangeDelAggregator::ShouldDelete;
   bool ShouldDelete(const ParsedInternalKey& parsed,
                     RangeDelPositioningMode mode) override;
+
+  bool ShouldDeleteRange(const Slice& start, const Slice& end,
+                         SequenceNumber seqno) override;
 
   bool IsRangeOverlapped(const Slice& start, const Slice& end);
 

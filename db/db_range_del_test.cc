@@ -831,6 +831,33 @@ TEST_F(DBRangeDelTest, IteratorIgnoresRangeDeletions) {
   db_->ReleaseSnapshot(snapshot);
 }
 
+TEST_F(DBRangeDelTest, IteratorCoveredSst) {
+  Options opts = CurrentOptions();
+  opts.statistics = CreateDBStatistics();
+  Reopen(opts);
+
+  db_->Put(WriteOptions(), "key", "val");
+  ASSERT_OK(db_->Flush(FlushOptions()));
+  db_->CompactRange(CompactRangeOptions(), nullptr, nullptr);
+  ASSERT_OK(
+      db_->DeleteRange(WriteOptions(), db_->DefaultColumnFamily(), "a", "z"));
+
+  auto prev_miss = TestGetTickerCount(opts, BLOCK_CACHE_MISS);
+  auto prev_hit = TestGetTickerCount(opts, BLOCK_CACHE_HIT);
+
+  ReadOptions read_opts;
+  auto* iter = db_->NewIterator(read_opts);
+
+  int count = 0;
+  for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    ++count;
+  }
+  ASSERT_EQ(0, count);
+  ASSERT_EQ(prev_miss, TestGetTickerCount(opts, BLOCK_CACHE_MISS));
+  ASSERT_EQ(prev_hit, TestGetTickerCount(opts, BLOCK_CACHE_HIT));
+  delete iter;
+}
+
 #ifndef ROCKSDB_UBSAN_RUN
 TEST_F(DBRangeDelTest, TailingIteratorRangeTombstoneUnsupported) {
   db_->Put(WriteOptions(), "key", "val");

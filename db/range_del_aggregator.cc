@@ -161,7 +161,7 @@ ForwardRangeDelIterator::ForwardRangeDelIterator(
       active_iters_(EndKeyMinComparator(icmp)),
       inactive_iters_(StartKeyMinComparator(icmp)) {}
 
-bool ForwardRangeDelIterator::ShouldDelete(const ParsedInternalKey& parsed) {
+void ForwardRangeDelIterator::AdvanceTo(const ParsedInternalKey& parsed) {
   // Move active iterators that end before parsed.
   while (!active_iters_.empty() &&
          icmp_->Compare((*active_iters_.top())->end_key(), parsed) <= 0) {
@@ -183,10 +183,30 @@ bool ForwardRangeDelIterator::ShouldDelete(const ParsedInternalKey& parsed) {
     PushIter(iter, parsed);
     assert(active_iters_.size() == active_seqnums_.size());
   }
+}
 
+bool ForwardRangeDelIterator::ShouldDelete(const ParsedInternalKey& parsed) {
+  AdvanceTo(parsed);
   return active_seqnums_.empty()
              ? false
              : (*active_seqnums_.begin())->seq() > parsed.sequence;
+}
+
+bool ForwardRangeDelIterator::ShouldDeleteRange(
+    const ParsedInternalKey& parsed_start, const ParsedInternalKey& parsed_end,
+    SequenceNumber seqno) {
+  ParsedInternalKey parsed_curr = parsed_start;
+  while (true) {
+    if (active_iters_.empty() || (*active_seqnums_.begin())->seq() <= seqno) {
+      return false;
+    }
+    parsed_curr = (*active_iters_.top())->end_key();
+    if (icmp_->Compare(parsed_end, parsed_curr) < 0) {
+      break;
+    }
+    AdvanceTo(parsed_curr);
+  };
+  return true;
 }
 
 void ForwardRangeDelIterator::Invalidate() {
@@ -273,6 +293,41 @@ bool RangeDelAggregator::StripeRep::ShouldDelete(
   }
 }
 
+bool RangeDelAggregator::StripeRep::ShouldDeleteRange(const Slice& start,
+                                                      const Slice& end,
+                                                      SequenceNumber seqno) {
+  ParsedInternalKey parsed_start;
+  if (!ParseInternalKey(start, &parsed_start)) {
+    assert(false);
+    return false;
+  }
+  ParsedInternalKey parsed_end;
+  if (!ParseInternalKey(end, &parsed_end)) {
+    assert(false);
+    return false;
+  }
+  if (icmp_->Compare(parsed_start, parsed_end) > 0) {
+    return false;
+  }
+
+  // TODO: there may be a way to avoid this `Invalidate()` if we exploit the
+  // traversal direction. For example, if this were a `kForwardTraversal`, and
+  // we knew `ShouldDeleteRange` could only be called on a range starting after
+  // the last point key checked using `ForwardRangeDelIterator::ShouldDelete`,
+  // we would not need to invalidate the forward iterator here.
+  Invalidate();
+  // Add all seen iterators. Maybe the range is fully covered by range
+  // tombstones that have not yet been seen by the aggregator, in which case
+  // this function yields a false negative.
+  for (auto it = iters_.begin(); it != iters_.end(); ++it) {
+    auto& iter = *it;
+    forward_iter_.AddNewIter(iter.get(), parsed_start);
+  }
+  bool res = forward_iter_.ShouldDeleteRange(parsed_start, parsed_end, seqno);
+  InvalidateForwardIter();
+  return res;
+}
+
 bool RangeDelAggregator::StripeRep::IsRangeOverlapped(const Slice& start,
                                                       const Slice& end) {
   Invalidate();
@@ -327,6 +382,12 @@ bool ReadRangeDelAggregator::ShouldDeleteImpl(const ParsedInternalKey& parsed,
   return rep_.ShouldDelete(parsed, mode);
 }
 
+bool ReadRangeDelAggregator::ShouldDeleteRange(const Slice& start,
+                                               const Slice& end,
+                                               SequenceNumber seqno) {
+  return rep_.ShouldDeleteRange(start, end, seqno);
+}
+
 bool ReadRangeDelAggregator::IsRangeOverlapped(const Slice& start,
                                                const Slice& end) {
   InvalidateRangeDelMapPositions();
@@ -367,6 +428,14 @@ bool CompactionRangeDelAggregator::ShouldDelete(const ParsedInternalKey& parsed,
     return false;
   }
   return it->second.ShouldDelete(parsed, mode);
+}
+
+bool CompactionRangeDelAggregator::ShouldDeleteRange(
+    const Slice& /* start */, const Slice& /* end */,
+    SequenceNumber /* seqno */) {
+  // This is a bit tricky to preserve snapshot correctness. For now, leave the
+  // optimization unimplemented for compaction.
+  return false;
 }
 
 namespace {
