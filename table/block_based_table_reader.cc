@@ -280,7 +280,8 @@ class PartitionIndexReader : public IndexReader, public Cleanable {
       // We don't return pinned datat from index blocks, so no need
       // to set `block_contents_pinned`.
       return new BlockBasedTableIterator<IndexBlockIter, BlockHandle>(
-          table_, ro, *icomparator_,
+          table_, ro, *icomparator_, nullptr /* range_del_agg */,
+          nullptr /* file_meta */,
           index_block_->NewIterator<IndexBlockIter>(
               icomparator_, icomparator_->user_comparator(), nullptr,
               kNullStats, true, index_key_includes_seq_, index_value_is_full_),
@@ -2327,11 +2328,22 @@ bool BlockBasedTable::PrefixMayMatch(
 }
 
 template <class TBlockIter, typename TValue>
-void BlockBasedTableIterator<TBlockIter, TValue>::Seek(const Slice& target) {
+void BlockBasedTableIterator<TBlockIter, TValue>::Seek(
+    const Slice& const_target) {
+  Slice target(const_target);
   is_out_of_bound_ = false;
+
   if (!CheckPrefixMayMatch(target)) {
     ResetDataIter();
     return;
+  }
+
+  // Before we seek the iterator, find the next non-deleted key.
+  InitRangeTombstone(target);
+  std::string tmp_target;
+  if (range_tombstone_.seq_ > 0) {
+    tmp_target = tombstone_internal_end_key();
+    target = tmp_target;
   }
 
   SavePrevIndexValue();
@@ -2358,11 +2370,21 @@ void BlockBasedTableIterator<TBlockIter, TValue>::Seek(const Slice& target) {
 
 template <class TBlockIter, typename TValue>
 void BlockBasedTableIterator<TBlockIter, TValue>::SeekForPrev(
-    const Slice& target) {
+    const Slice& const_target) {
+  Slice target(const_target);
   is_out_of_bound_ = false;
+
   if (!CheckPrefixMayMatch(target)) {
     ResetDataIter();
     return;
+  }
+
+  // Before we seek the iterator, find the previous non-deleted key.
+  InitRangeTombstone(target);
+  std::string tmp_target;
+  if (range_tombstone_.seq_ > 0) {
+    tmp_target = tombstone_internal_start_key();
+    target = tmp_target;
   }
 
   SavePrevIndexValue();
@@ -2411,6 +2433,9 @@ void BlockBasedTableIterator<TBlockIter, TValue>::SeekToFirst() {
   }
   InitDataBlock();
   block_iter_.SeekToFirst();
+  if (Valid()) {
+    InitRangeTombstone(key());
+  }
   FindKeyForward();
   CheckOutOfBound();
 }
@@ -2426,6 +2451,9 @@ void BlockBasedTableIterator<TBlockIter, TValue>::SeekToLast() {
   }
   InitDataBlock();
   block_iter_.SeekToLast();
+  if (Valid()) {
+    InitRangeTombstone(key());
+  }
   FindKeyBackward();
 }
 
@@ -2566,34 +2594,197 @@ void BlockBasedTableIterator<TBlockIter, TValue>::FindBlockForward() {
 }
 
 template <class TBlockIter, typename TValue>
+void BlockBasedTableIterator<TBlockIter, TValue>::FindTombstoneEndForward() {
+  do {
+    assert(Valid());
+    assert(range_tombstone_.start_key_.empty() ||
+           user_comparator_.Compare(range_tombstone_.start_key_, user_key()) <= 0);
+
+    // Check to see if block_iter_.key() is covered by the current range
+    // tombstone. Note that range_tombstone_ is not a raw range tombstone
+    // returned from RangeDelAggregator, but a cooked one. See
+    // InitRangeTombstone().
+    if (range_tombstone_.end_key_.empty()) {
+      // The range tombstone extends to the end of the sstable.
+      if (range_tombstone_.seq_ == 0) {
+        // The range tombstone doesn't apply to the keys in the sstable.
+        // Return the entry.
+        return;
+      }
+      ResetDataIter();
+      return;
+    }
+
+    auto ukey = user_key();
+    if (icomp_.user_comparator()->Compare(ukey, range_tombstone_.end_key_) >= 0) {
+      // The key is past the tombstone. Grab the tombstone covering the
+      // current key. The new tombstone might cover the existing key, so loop
+      // so that we can have the proper check for whether the tombstone covers
+      // the key and is a deletion tombstone or not.
+      InitRangeTombstone(key());
+      continue;
+    }
+
+    // The key is contained within the current tombstone.
+    if (range_tombstone_.seq_ == 0) {
+      // The tombstone doesn't apply to the sstable. Return the entry.
+      return;
+    }
+
+    // `iterate_upper_bound` is exclusive just like
+    // `range_tombstone_.end_key_`. If they are equal the seek would go out of
+    // bounds.
+    bool end_key_is_out_of_bound = read_options_.iterate_upper_bound != nullptr &&
+          (user_comparator_.Compare(*read_options_.iterate_upper_bound,
+                                    range_tombstone_.end_key_) <= 0);
+    TEST_SYNC_POINT_CALLBACK(
+        "BlockBasedTable::BlockEntryIteratorState::KeyReachedUpperBound",
+        &end_key_is_out_of_bound);
+    if (end_key_is_out_of_bound) {
+      is_out_of_bound_ = true;
+      return;
+    }
+
+    // Find the next non-deleted key.
+    index_iter_->Seek(tombstone_internal_end_key());
+    if (!index_iter_->Valid()) {
+      ResetDataIter();
+      return;
+    }
+    InitDataBlock();
+    block_iter_.Seek(tombstone_internal_end_key());
+    if (!block_iter_.Valid()) {
+      FindBlockForward();
+    }
+  } while (Valid());
+}
+
+template <class TBlockIter, typename TValue>
 void BlockBasedTableIterator<TBlockIter, TValue>::FindKeyForward() {
   assert(!is_out_of_bound_);
 
   if (!block_iter_.Valid()) {
     FindBlockForward();
   }
+
+  // TODO: need to verify this branch does not slow down the common case, i.e.,
+  // when no range tombstones exist. One mitigation could be ensuring
+  // `range_del_agg_ == nullptr` here when `ReadOptions::ignore_range_deletions`
+  // is set.
+  if (range_del_agg_ != nullptr && file_meta_ != nullptr &&
+      Valid() && !range_del_agg_->IsEmpty()) {
+    FindTombstoneEndForward();
+  }
 }
 
 template <class TBlockIter, typename TValue>
 void BlockBasedTableIterator<TBlockIter, TValue>::FindKeyBackward() {
-  while (!block_iter_.Valid()) {
-    if (!block_iter_.status().ok()) {
+  // FindKeyBackward is called when the iterator has already been advanced
+  // (via a call to SeekForPrev, SeekToLast or Prev) and we're looking for the
+  // next valid key.
+  assert(!is_out_of_bound_);
+
+  for (;;) {
+    while (!block_iter_.Valid()) {
+      if (!block_iter_.status().ok()) {
+        return;
+      }
+
+      ResetDataIter();
+      index_iter_->Prev();
+
+      if (index_iter_->Valid()) {
+        InitDataBlock();
+        block_iter_.SeekToLast();
+      } else {
+        return;
+      }
+    }
+
+    if (!Valid()) {
       return;
     }
 
-    ResetDataIter();
-    index_iter_->Prev();
+    // We could have check lower bound here too, but we opt not to do it for
+    // code simplicity.
 
-    if (index_iter_->Valid()) {
-      InitDataBlock();
-      block_iter_.SeekToLast();
-    } else {
+    // Check to see if block_iter_.key() is covered by the current range
+    // tombstone. Note that range_tombstone_ is not a raw range tombstone
+    // returned from RangeDelAggregator, but a cooked one. See
+    // InitRangeTombstone().
+    if (range_tombstone_.start_key_.empty()) {
+      // The range tombstone extends to the beginning of the sstable.
+      if (range_tombstone_.seq_ == 0) {
+        // The range doesn't apply to the keys in the sstable. Return the
+        // entry.
+        return;
+      }
+      // The range tombstone is a deletion tombstone. Loop to allow moving to
+      // the previous file.
+      ResetDataIter();
       return;
+    }
+
+    auto ukey = user_key();
+    if (icomp_.user_comparator()->Compare(ukey, range_tombstone_.start_key_) <
+        0) {
+      // The key is past the tombstone. Grab the tombstone covering the
+      // current key. The new tombstone might cover the existing key, so loop
+      // so that we can have the proper check for whether the tombstone covers
+      // the key and is a deletion tombstone or not.
+      InitRangeTombstone(key());
+      continue;
+    }
+    // The key is contained within the current tombstone.
+    if (range_tombstone_.seq_ == 0) {
+      // The tombstone doesn't apply to the sstable. Return the entry.
+      return;
+    }
+
+    // Find the previous non-deleted key.
+    index_iter_->Seek(tombstone_internal_start_key());
+    if (!index_iter_->Valid()) {
+      index_iter_->SeekToLast();
+      if (!index_iter_->Valid()) {
+        ResetDataIter();
+        block_iter_points_to_real_block_ = false;
+        return;
+      }
+    }
+    InitDataBlock();
+    block_iter_.SeekForPrev(tombstone_internal_start_key());
+    if (Valid()) {
+      InitRangeTombstone(key());
     }
   }
+}
 
-  // We could have check lower bound here too, but we opt not to do it for
-  // code simplicity.
+template <class TBlockIter, typename TValue>
+void BlockBasedTableIterator<TBlockIter, TValue>::InitRangeTombstone(
+    const Slice& target) {
+  if (range_del_agg_ == nullptr || file_meta_ == nullptr) {
+    return;
+  }
+
+  range_tombstone_ =
+      range_del_agg_->GetTombstone(target, file_meta_->fd.largest_seqno);
+
+  // Clear the start key if it is less than the smallest key in the
+  // sstable. This allows us to avoid comparisons during Prev() in the common
+  // case.
+  if (!range_tombstone_.start_key_.empty() &&
+      icomp_.user_comparator()->Compare(range_tombstone_.start_key_,
+                                        file_meta_->smallest.user_key()) < 0) {
+    range_tombstone_.start_key_.clear();
+  }
+  // Clear the end key if it is larger than the largest key in the
+  // sstable. This allows us to avoid comparisons during Next() in the common
+  // case.
+  if (!range_tombstone_.end_key_.empty() &&
+      icomp_.user_comparator()->Compare(range_tombstone_.end_key_,
+                                        file_meta_->largest.user_key()) > 0) {
+    range_tombstone_.end_key_.clear();
+  }
 }
 
 template <class TBlockIter, typename TValue>
@@ -2607,13 +2798,14 @@ void BlockBasedTableIterator<TBlockIter, TValue>::CheckOutOfBound() {
 
 InternalIterator* BlockBasedTable::NewIterator(
     const ReadOptions& read_options, const SliceTransform* prefix_extractor,
+    RangeDelAggregator* range_del_agg, const FileMetaData* file_meta,
     Arena* arena, bool skip_filters, bool for_compaction) {
   bool need_upper_bound_check =
       PrefixExtractorChanged(rep_->table_properties.get(), prefix_extractor);
   const bool kIsNotIndex = false;
   if (arena == nullptr) {
     return new BlockBasedTableIterator<DataBlockIter>(
-        this, read_options, rep_->internal_comparator,
+        this, read_options, rep_->internal_comparator, range_del_agg, file_meta,
         NewIndexIterator(
             read_options,
             need_upper_bound_check &&
@@ -2626,7 +2818,7 @@ InternalIterator* BlockBasedTable::NewIterator(
     auto* mem =
         arena->AllocateAligned(sizeof(BlockBasedTableIterator<DataBlockIter>));
     return new (mem) BlockBasedTableIterator<DataBlockIter>(
-        this, read_options, rep_->internal_comparator,
+        this, read_options, rep_->internal_comparator, range_del_agg, file_meta,
         NewIndexIterator(read_options, need_upper_bound_check),
         !skip_filters && !read_options.total_order_seek &&
             prefix_extractor != nullptr,

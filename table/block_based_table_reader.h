@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "db/range_del_aggregator.h"
 #include "db/range_tombstone_fragmenter.h"
 #include "options/cf_options.h"
 #include "rocksdb/options.h"
@@ -111,6 +112,8 @@ class BlockBasedTable : public TableReader {
   // @param skip_filters Disables loading/accessing the filter block
   InternalIterator* NewIterator(const ReadOptions&,
                                 const SliceTransform* prefix_extractor,
+                                RangeDelAggregator* range_del_agg = nullptr,
+                                const FileMetaData* file_meta = nullptr,
                                 Arena* arena = nullptr,
                                 bool skip_filters = false,
                                 bool for_compaction = false) override;
@@ -581,19 +584,21 @@ struct BlockBasedTable::Rep {
 template <class TBlockIter, typename TValue = Slice>
 class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
  public:
-  BlockBasedTableIterator(BlockBasedTable* table,
-                          const ReadOptions& read_options,
-                          const InternalKeyComparator& icomp,
-                          InternalIteratorBase<BlockHandle>* index_iter,
-                          bool check_filter, bool need_upper_bound_check,
-                          const SliceTransform* prefix_extractor, bool is_index,
-                          bool key_includes_seq = true,
-                          bool index_key_is_full = true,
-                          bool for_compaction = false)
+  BlockBasedTableIterator(
+      BlockBasedTable* table, const ReadOptions& read_options,
+      const InternalKeyComparator& icomp, RangeDelAggregator* range_del_agg,
+      const FileMetaData* file_meta,
+      InternalIteratorBase<BlockHandle>* index_iter, bool check_filter,
+      bool need_upper_bound_check, const SliceTransform* prefix_extractor,
+      bool is_index, bool key_includes_seq = true,
+      bool index_key_is_full = true, bool for_compaction = false)
       : table_(table),
         read_options_(read_options),
         icomp_(icomp),
         user_comparator_(icomp.user_comparator()),
+        range_del_agg_(range_del_agg),
+        file_meta_(file_meta),
+        range_tombstone_(Slice(), Slice(), 0),
         index_iter_(index_iter),
         pinned_iters_mgr_(nullptr),
         block_iter_points_to_real_block_(false),
@@ -691,14 +696,51 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
   void InitDataBlock();
   inline void FindKeyForward();
   void FindBlockForward();
+  void FindTombstoneEndForward();
   void FindKeyBackward();
   void CheckOutOfBound();
+
+ private:
+  // Find the range tombstone that contains the target. The target key is
+  // guaranteed to be within the bounds of the tombstone (note the special
+  // handling of the empty key for tombstone bounds). If we have a non-zero
+  // sequence number the tombstone applies to all key sequence numbers within
+  // the current file, allowing us to skip over a swath of deleted keys.
+  void InitRangeTombstone(const Slice& target);
+
+  std::string tombstone_internal_start_key() const {
+    std::string internal_key;
+    AppendInternalKey(&internal_key, {range_tombstone_.start_key_,
+                                      range_tombstone_.seq_, kTypeValue});
+    return internal_key;
+  }
+
+  std::string tombstone_internal_end_key() const {
+    std::string internal_key;
+    // We specify kMaxSequenceNumber instead of the tombstone's
+    // sequence number because internal keys are ordered by descending
+    // sequence number. Using kMaxSequenceNumber ensures we'll seek to
+    // a version of the key that is more recent than the
+    // tombstone. Note that the tombstone end-key is exclusive, so the
+    // tombstone doesn't apply to the end-key in any case.
+    AppendInternalKey(&internal_key, {range_tombstone_.end_key_,
+                                      kMaxSequenceNumber, kTypeValue});
+    return internal_key;
+  }
 
  private:
   BlockBasedTable* table_;
   const ReadOptions read_options_;
   const InternalKeyComparator& icomp_;
   UserComparatorWrapper user_comparator_;
+  RangeDelAggregator* const range_del_agg_;
+  const FileMetaData* const file_meta_;
+  // The range tombstone that covers the current key. Note that this is a
+  // cooked value, not the raw tombstone as retrieved from
+  // RangeDelAggregator::GetTombstone(). In particular, the start and end keys
+  // will be cleared to indicate the tombstone extends past the beginning or
+  // end of the sstable.
+  RangeTombstone range_tombstone_;
   InternalIteratorBase<BlockHandle>* index_iter_;
   PinnedIteratorsManager* pinned_iters_mgr_;
   TBlockIter block_iter_;

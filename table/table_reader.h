@@ -25,6 +25,8 @@ struct ReadOptions;
 struct TableProperties;
 class GetContext;
 class MultiGetContext;
+struct FileMetaData;
+class RangeDelAggregator;
 
 // A Table is a sorted map from strings to strings.  Tables are
 // immutable and persistent.  A Table may be safely accessed from
@@ -42,11 +44,11 @@ class TableReader {
   //        all the states but those allocated in arena.
   // skip_filters: disables checking the bloom filters even if they exist. This
   //               option is effective only for block-based table format.
-  virtual InternalIterator* NewIterator(const ReadOptions&,
-                                        const SliceTransform* prefix_extractor,
-                                        Arena* arena = nullptr,
-                                        bool skip_filters = false,
-                                        bool for_compaction = false) = 0;
+  virtual InternalIterator* NewIterator(
+      const ReadOptions&, const SliceTransform* prefix_extractor,
+      RangeDelAggregator* range_del_agg = nullptr,
+      const FileMetaData* file_meta = nullptr, Arena* arena = nullptr,
+      bool skip_filters = false, bool for_compaction = false) = 0;
 
   virtual FragmentedRangeTombstoneIterator* NewRangeTombstoneIterator(
       const ReadOptions& /*read_options*/) {

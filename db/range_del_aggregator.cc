@@ -216,6 +216,8 @@ RangeTombstone ForwardRangeDelIterator::GetTombstone(
     return RangeTombstone(Slice(), Slice(), 0);
   }
   SequenceNumber tombstone_seqno = (*active_seqnums_.begin())->seq();
+  // TODO: we should return internal keys. Perhaps the PartialRangeTombstone
+  // patch will facilitate this.
   return RangeTombstone((*active_seqnums_.begin())->start_key().user_key,
                         (*active_seqnums_.begin())->end_key().user_key,
                         seqno < tombstone_seqno ? tombstone_seqno : 0);
