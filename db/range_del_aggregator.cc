@@ -209,18 +209,17 @@ bool ForwardRangeDelIterator::ShouldDeleteRange(
   return true;
 }
 
-RangeTombstone ForwardRangeDelIterator::GetTombstone(
+PartialRangeTombstone ForwardRangeDelIterator::GetTombstone(
     const ParsedInternalKey& parsed, SequenceNumber seqno) {
   AdvanceTo(parsed);
   if (active_seqnums_.empty()) {
-    return RangeTombstone(Slice(), Slice(), 0);
+    return PartialRangeTombstone();
   }
   SequenceNumber tombstone_seqno = (*active_seqnums_.begin())->seq();
-  // TODO: we should return internal keys. Perhaps the PartialRangeTombstone
-  // patch will facilitate this.
-  return RangeTombstone((*active_seqnums_.begin())->start_key().user_key,
-                        (*active_seqnums_.begin())->end_key().user_key,
-                        seqno < tombstone_seqno ? tombstone_seqno : 0);
+  ParsedInternalKey start_parsed = (*active_seqnums_.begin())->start_key();
+  ParsedInternalKey end_parsed = (*active_seqnums_.begin())->end_key();
+  return PartialRangeTombstone(&start_parsed, &end_parsed,
+                               seqno < tombstone_seqno ? tombstone_seqno : 0);
 }
 
 void ForwardRangeDelIterator::Invalidate() {
@@ -342,12 +341,12 @@ bool RangeDelAggregator::StripeRep::ShouldDeleteRange(const Slice& start,
   return res;
 }
 
-RangeTombstone RangeDelAggregator::StripeRep::GetTombstone(
+PartialRangeTombstone RangeDelAggregator::StripeRep::GetTombstone(
     const Slice& key, SequenceNumber seqno) {
   ParsedInternalKey parsed_key;
   if (!ParseInternalKey(key, &parsed_key)) {
     assert(false);
-    return RangeTombstone(Slice(), Slice(), 0);
+    return PartialRangeTombstone();
   }
   // TODO: there may be a way to avoid this `Invalidate()` if we exploit the
   // traversal direction. For example, if this were a `kForwardTraversal`, and
@@ -425,8 +424,8 @@ bool ReadRangeDelAggregator::ShouldDeleteRange(const Slice& start,
   return rep_.ShouldDeleteRange(start, end, seqno);
 }
 
-RangeTombstone ReadRangeDelAggregator::GetTombstone(const Slice& key,
-                                                    SequenceNumber seqno) {
+PartialRangeTombstone ReadRangeDelAggregator::GetTombstone(
+    const Slice& key, SequenceNumber seqno) {
   return rep_.GetTombstone(key, seqno);
 }
 
@@ -480,11 +479,11 @@ bool CompactionRangeDelAggregator::ShouldDeleteRange(
   return false;
 }
 
-RangeTombstone CompactionRangeDelAggregator::GetTombstone(
+PartialRangeTombstone CompactionRangeDelAggregator::GetTombstone(
     const Slice& /* key */, SequenceNumber /* seqno */) {
   // This is a bit tricky to preserve snapshot correctness. For now, leave the
   // optimization unimplemented for compaction.
-  return RangeTombstone(Slice(), Slice(), 0);
+  return PartialRangeTombstone();
 }
 
 namespace {

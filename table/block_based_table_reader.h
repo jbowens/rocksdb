@@ -598,7 +598,6 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
         user_comparator_(icomp.user_comparator()),
         range_del_agg_(range_del_agg),
         file_meta_(file_meta),
-        range_tombstone_(Slice(), Slice(), 0),
         index_iter_(index_iter),
         pinned_iters_mgr_(nullptr),
         block_iter_points_to_real_block_(false),
@@ -708,25 +707,8 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
   // the current file, allowing us to skip over a swath of deleted keys.
   void InitRangeTombstone(const Slice& target);
 
-  std::string tombstone_internal_start_key() const {
-    std::string internal_key;
-    AppendInternalKey(&internal_key, {range_tombstone_.start_key_,
-                                      range_tombstone_.seq_, kTypeValue});
-    return internal_key;
-  }
-
-  std::string tombstone_internal_end_key() const {
-    std::string internal_key;
-    // We specify kMaxSequenceNumber instead of the tombstone's
-    // sequence number because internal keys are ordered by descending
-    // sequence number. Using kMaxSequenceNumber ensures we'll seek to
-    // a version of the key that is more recent than the
-    // tombstone. Note that the tombstone end-key is exclusive, so the
-    // tombstone doesn't apply to the end-key in any case.
-    AppendInternalKey(&internal_key, {range_tombstone_.end_key_,
-                                      kMaxSequenceNumber, kTypeValue});
-    return internal_key;
-  }
+  std::string tombstone_internal_start_key() const;
+  std::string tombstone_internal_end_key() const;
 
  private:
   BlockBasedTable* table_;
@@ -736,11 +718,11 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
   RangeDelAggregator* const range_del_agg_;
   const FileMetaData* const file_meta_;
   // The range tombstone that covers the current key. Note that this is a
-  // cooked value, not the raw tombstone as retrieved from
+  // cooked value, not the raw partial tombstone as retrieved from
   // RangeDelAggregator::GetTombstone(). In particular, the start and end keys
-  // will be cleared to indicate the tombstone extends past the beginning or
+  // will be nullptr to indicate the tombstone extends past the beginning or
   // end of the sstable.
-  RangeTombstone range_tombstone_;
+  PartialRangeTombstone range_tombstone_;
   InternalIteratorBase<BlockHandle>* index_iter_;
   PinnedIteratorsManager* pinned_iters_mgr_;
   TBlockIter block_iter_;

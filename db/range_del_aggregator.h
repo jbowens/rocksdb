@@ -120,8 +120,8 @@ class ForwardRangeDelIterator {
   // number. A valid tombstone is always returned, though it may cover an
   // empty range of keys or the sequence number may be 0 to indicate that no
   // tombstone covers the specified key.
-  RangeTombstone GetTombstone(const ParsedInternalKey& parsed,
-                              SequenceNumber seqno);
+  PartialRangeTombstone GetTombstone(const ParsedInternalKey& parsed,
+                                     SequenceNumber seqno);
   void Invalidate();
 
   void AddNewIter(TruncatedRangeDelIterator* iter,
@@ -311,8 +311,8 @@ class RangeDelAggregator {
   // number. A valid tombstone is always returned, though it may cover an
   // empty range of keys or the sequence number may be 0 to indicate that no
   // tombstone covers the specified key.
-  virtual RangeTombstone GetTombstone(const Slice& key,
-                                      SequenceNumber seqno) = 0;
+  virtual PartialRangeTombstone GetTombstone(const Slice& key,
+                                             SequenceNumber seqno) = 0;
 
   virtual void InvalidateRangeDelMapPositions() = 0;
 
@@ -357,7 +357,7 @@ class RangeDelAggregator {
     // number. A valid tombstone is always returned, though it may cover an
     // empty range of keys or the sequence number may be 0 to indicate that no
     // tombstone covers the specified key.
-    RangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno);
+    PartialRangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno);
 
     void Invalidate() {
       InvalidateForwardIter();
@@ -426,7 +426,8 @@ class ReadRangeDelAggregator final : public RangeDelAggregator {
   // number. A valid tombstone is always returned, though it may cover an
   // empty range of keys or the sequence number may be 0 to indicate that no
   // tombstone covers the specified key.
-  RangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno) override;
+  PartialRangeTombstone GetTombstone(const Slice& user_key,
+                                     SequenceNumber seqno) override;
 
   bool IsRangeOverlapped(const Slice& start, const Slice& end);
 
@@ -464,7 +465,8 @@ class CompactionRangeDelAggregator : public RangeDelAggregator {
   // number. A valid tombstone is always returned, though it may cover an
   // empty range of keys or the sequence number may be 0 to indicate that no
   // tombstone covers the specified key.
-  RangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno) override;
+  PartialRangeTombstone GetTombstone(const Slice& key,
+                                     SequenceNumber seqno) override;
 
   bool IsRangeOverlapped(const Slice& start, const Slice& end);
 

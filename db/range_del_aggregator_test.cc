@@ -40,6 +40,25 @@ std::unique_ptr<InternalIterator> MakeRangeDelIter(
       new test::VectorIterator(keys, values));
 }
 
+void VerifyPartialTombstonesEq(const PartialRangeTombstone& a,
+                               const PartialRangeTombstone& b) {
+  ASSERT_EQ(a.seq(), b.seq());
+  if (a.start_key() != nullptr) {
+    ASSERT_EQ(a.start_key()->user_key, b.start_key()->user_key);
+    ASSERT_EQ(a.start_key()->sequence, b.start_key()->sequence);
+    ASSERT_EQ(a.start_key()->type, b.start_key()->type);
+  } else {
+    ASSERT_EQ(b.start_key(), nullptr);
+  }
+  if (a.end_key() != nullptr) {
+    ASSERT_EQ(a.end_key()->user_key, b.end_key()->user_key);
+    ASSERT_EQ(a.end_key()->sequence, b.end_key()->sequence);
+    ASSERT_EQ(a.end_key()->type, b.end_key()->type);
+  } else {
+    ASSERT_EQ(b.end_key(), nullptr);
+  }
+}
+
 std::vector<std::unique_ptr<FragmentedRangeTombstoneList>>
 MakeFragmentedTombstoneLists(
     const std::vector<std::vector<RangeTombstone>>& range_dels_list) {
@@ -81,7 +100,7 @@ struct ShouldDeleteRangeTestCase {
 struct GetTombstoneTestCase {
   ParsedInternalKey key;
   SequenceNumber seqno;
-  RangeTombstone result;
+  PartialRangeTombstone result;
 };
 
 struct IsRangeOverlappedTestCase {
@@ -201,19 +220,15 @@ void VerifyGetTombstone(ReadRangeDelAggregator* range_del_agg,
   for (const auto& test_case : test_cases) {
     std::string key;
     AppendInternalKey(&key, test_case.key);
-    auto res = range_del_agg->GetTombstone(key, test_case.seqno);
-    EXPECT_EQ(test_case.result.start_key_, res.start_key_);
-    EXPECT_EQ(test_case.result.end_key_, res.end_key_);
-    EXPECT_EQ(test_case.result.seq_, res.seq_);
+    VerifyPartialTombstonesEq(
+        test_case.result, range_del_agg->GetTombstone(key, test_case.seqno));
   }
   for (auto it = test_cases.rbegin(); it != test_cases.rend(); ++it) {
     const auto& test_case = *it;
     std::string key;
     AppendInternalKey(&key, test_case.key);
-    auto res = range_del_agg->GetTombstone(key, test_case.seqno);
-    EXPECT_EQ(test_case.result.start_key_, res.start_key_);
-    EXPECT_EQ(test_case.result.end_key_, res.end_key_);
-    EXPECT_EQ(test_case.result.seq_, res.seq_);
+    VerifyPartialTombstonesEq(
+        test_case.result, range_del_agg->GetTombstone(key, test_case.seqno));
   }
 }
 
@@ -442,16 +457,24 @@ TEST_F(RangeDelAggregatorTest, SingleIterInAggregator) {
            false},
       });
 
+  ParsedInternalKey a = {"a", kMaxSequenceNumber, kTypeRangeDeletion},
+                    c = {"c", kMaxSequenceNumber, kTypeRangeDeletion},
+                    e = {"e", kMaxSequenceNumber, kTypeRangeDeletion},
+                    g = {"g", kMaxSequenceNumber, kTypeRangeDeletion};
   VerifyGetTombstone(
       &range_del_agg,
       {
-          {InternalValue("_", kMaxSequenceNumber), 9, {Slice(), Slice(), 0}},
-          {InternalValue("a", kMaxSequenceNumber), 10, {"a", "c", 0}},
-          {InternalValue("a", kMaxSequenceNumber), 9, {"a", "c", 10}},
-          {InternalValue("a", 0), 9, {"a", "c", 10}},
-          {InternalValue("c", kMaxSequenceNumber), 9, {"c", "e", 10}},
-          {InternalValue("e", kMaxSequenceNumber), 7, {"e", "g", 8}},
-          {InternalValue("g", kMaxSequenceNumber), 7, {Slice(), Slice(), 0}},
+          {InternalValue("_", kMaxSequenceNumber), 9, PartialRangeTombstone()},
+          {InternalValue("a", kMaxSequenceNumber), 10,
+           PartialRangeTombstone(&a, &c, 0)},
+          {InternalValue("a", kMaxSequenceNumber), 9,
+           PartialRangeTombstone(&a, &c, 10)},
+          {InternalValue("a", 0), 9, PartialRangeTombstone(&a, &c, 10)},
+          {InternalValue("c", kMaxSequenceNumber), 9,
+           PartialRangeTombstone(&c, &e, 10)},
+          {InternalValue("e", kMaxSequenceNumber), 7,
+           PartialRangeTombstone(&e, &g, 8)},
+          {InternalValue("g", kMaxSequenceNumber), 7, PartialRangeTombstone()},
       });
 
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
@@ -497,15 +520,25 @@ TEST_F(RangeDelAggregatorTest, MultipleItersInAggregator) {
                            InternalValue("hi", kMaxSequenceNumber), 24, true},
                       });
 
+  ParsedInternalKey a = {"a", kMaxSequenceNumber, kTypeRangeDeletion},
+                    b = {"b", kMaxSequenceNumber, kTypeRangeDeletion},
+                    c = {"c", kMaxSequenceNumber, kTypeRangeDeletion},
+                    e = {"e", kMaxSequenceNumber, kTypeRangeDeletion},
+                    g = {"g", kMaxSequenceNumber, kTypeRangeDeletion};
   VerifyGetTombstone(
       &range_del_agg,
       {
-          {InternalValue("a", kMaxSequenceNumber), 20, {"a", "b", 0}},
-          {InternalValue("a", kMaxSequenceNumber), 19, {"a", "b", 20}},
-          {InternalValue("b", kMaxSequenceNumber), 9, {"a", "c", 10}},
-          {InternalValue("c", kMaxSequenceNumber), 9, {"c", "e", 10}},
-          {InternalValue("e", kMaxSequenceNumber), 7, {"e", "g", 8}},
-          {InternalValue("g", kMaxSequenceNumber), 7, {Slice(), Slice(), 0}},
+          {InternalValue("a", kMaxSequenceNumber), 20,
+           PartialRangeTombstone(&a, &b, 0)},
+          {InternalValue("a", kMaxSequenceNumber), 19,
+           PartialRangeTombstone(&a, &b, 20)},
+          {InternalValue("b", kMaxSequenceNumber), 9,
+           PartialRangeTombstone(&a, &c, 10)},
+          {InternalValue("c", kMaxSequenceNumber), 9,
+           PartialRangeTombstone(&c, &e, 10)},
+          {InternalValue("e", kMaxSequenceNumber), 7,
+           PartialRangeTombstone(&e, &g, 8)},
+          {InternalValue("g", kMaxSequenceNumber), 7, PartialRangeTombstone()},
       });
 
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
@@ -552,14 +585,22 @@ TEST_F(RangeDelAggregatorTest, MultipleItersInAggregatorWithUpperBound) {
                            InternalValue("hi", kMaxSequenceNumber), 24, false},
                       });
 
+  ParsedInternalKey a = {"a", kMaxSequenceNumber, kTypeRangeDeletion},
+                    c = {"c", kMaxSequenceNumber, kTypeRangeDeletion},
+                    e = {"e", kMaxSequenceNumber, kTypeRangeDeletion},
+                    g = {"g", kMaxSequenceNumber, kTypeRangeDeletion};
   VerifyGetTombstone(
       &range_del_agg,
       {
-          {InternalValue("a", kMaxSequenceNumber), 19, {"a", "c", 0}},
-          {InternalValue("b", kMaxSequenceNumber), 9, {"a", "c", 10}},
-          {InternalValue("c", kMaxSequenceNumber), 9, {"c", "e", 10}},
-          {InternalValue("e", kMaxSequenceNumber), 7, {"e", "g", 8}},
-          {InternalValue("g", kMaxSequenceNumber), 7, {Slice(), Slice(), 0}},
+          {InternalValue("a", kMaxSequenceNumber), 19,
+           PartialRangeTombstone(&a, &c, 0)},
+          {InternalValue("b", kMaxSequenceNumber), 9,
+           PartialRangeTombstone(&a, &c, 10)},
+          {InternalValue("c", kMaxSequenceNumber), 9,
+           PartialRangeTombstone(&c, &e, 10)},
+          {InternalValue("e", kMaxSequenceNumber), 7,
+           PartialRangeTombstone(&e, &g, 8)},
+          {InternalValue("g", kMaxSequenceNumber), 7, PartialRangeTombstone()},
       });
 
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
@@ -617,14 +658,20 @@ TEST_F(RangeDelAggregatorTest, MultipleTruncatedItersInAggregator) {
            false},
       });
 
+  ParsedInternalKey a4 = {"a", 4, kTypeValue},
+                    m = {"m", kMaxSequenceNumber, kTypeRangeDeletion},
+                    m20 = {"m", 20, kTypeValue},
+                    x = {"x", kMaxSequenceNumber, kTypeRangeDeletion},
+                    x5 = {"x", 5, kTypeValue},
+                    z = {"z", kMaxSequenceNumber, kTypeRangeDeletion};
   VerifyGetTombstone(
       &range_del_agg,
       {
-          {InternalValue("a", kMaxSequenceNumber), 9, {Slice(), Slice(), 0}},
-          {InternalValue("a", 4), 9, {"a", "m", 10}},
-          {InternalValue("m", kMaxSequenceNumber), 9, {Slice(), Slice(), 0}},
-          {InternalValue("m", 20), 9, {"m", "x", 10}},
-          {InternalValue("x", 5), 9, {"x", "z", 10}},
+          {InternalValue("a", kMaxSequenceNumber), 9, PartialRangeTombstone()},
+          {InternalValue("a", 4), 9, PartialRangeTombstone(&a4, &m, 10)},
+          {InternalValue("m", kMaxSequenceNumber), 9, PartialRangeTombstone()},
+          {InternalValue("m", 20), 9, PartialRangeTombstone(&m20, &x, 10)},
+          {InternalValue("x", 5), 9, PartialRangeTombstone(&x5, &z, 10)},
       });
 
   VerifyIsRangeOverlapped(&range_del_agg, {{"", "_", false},
@@ -864,6 +911,13 @@ TEST_F(RangeDelAggregatorTest,
                                                                {"d", "f", 30},
                                                                {"d", "f", 8},
                                                                {"f", "g", 8}});
+}
+
+TEST_F(RangeDelAggregatorTest, IsEmpty) {
+  auto& icmp = bytewise_icmp;
+  const std::vector<SequenceNumber> snapshots;
+  ReadRangeDelAggregator range_del_agg(&icmp, kMaxSequenceNumber);
+  ASSERT_TRUE(range_del_agg.IsEmpty());
 }
 
 }  // namespace rocksdb
