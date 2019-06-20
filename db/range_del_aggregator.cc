@@ -212,8 +212,15 @@ bool ForwardRangeDelIterator::ShouldDeleteRange(
 PartialRangeTombstone ForwardRangeDelIterator::GetTombstone(
     const ParsedInternalKey& parsed, SequenceNumber seqno) {
   AdvanceTo(parsed);
-  if (active_seqnums_.empty()) {
-    return PartialRangeTombstone();
+  if (active_iters_.empty()) {
+    if (inactive_iters_.empty()) {
+      return PartialRangeTombstone();
+    }
+    // We are before the range tombstones. Cook a non-covering range tombstone
+    // (i.e., one with seqno zero) and pretend it ends where the real tombstones
+    // start.
+    ParsedInternalKey start_parsed = inactive_iters_.top()->start_key();
+    return PartialRangeTombstone(nullptr, &start_parsed, 0);
   }
   SequenceNumber tombstone_seqno = (*active_seqnums_.begin())->seq();
   ParsedInternalKey start_parsed = (*active_seqnums_.begin())->start_key();
