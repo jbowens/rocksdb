@@ -116,10 +116,17 @@ class ForwardRangeDelIterator {
   bool ShouldDeleteRange(const ParsedInternalKey& parsed_start,
                          const ParsedInternalKey& parsed_end,
                          SequenceNumber seqno);
-  // Get the range tombstone at the specified internal key and sequence
-  // number. A valid tombstone is always returned, though it may cover an
-  // empty range of keys or the sequence number may be 0 to indicate that no
-  // tombstone covers the specified key.
+  // Gets a range tombstone for caching in the client iterator. The keys passed
+  // to this function and `ShouldDelete()` must be non-decreasing as they share
+  // common state for position tracking. For example, the following is
+  // forbidden:
+  //
+  // - ShouldDelete("a")
+  // - GetTombstone("c")
+  // - ShouldDelete("b")
+  //
+  // @param key Internal key at which the client iterator is positioned
+  // @param seqno Max seqnum visible to the client iterator
   PartialRangeTombstone GetTombstone(const ParsedInternalKey& parsed,
                                      SequenceNumber seqno);
   void Invalidate();
@@ -204,6 +211,19 @@ class ReverseRangeDelIterator {
 
   bool ShouldDelete(const ParsedInternalKey& parsed);
   void Invalidate();
+  // Gets a range tombstone for caching in the client iterator. The keys passed
+  // to this function and `ShouldDelete()` must be non-increasing as they share
+  // common state for position tracking. For example, the following is
+  // forbidden:
+  //
+  // - ShouldDelete("c")
+  // - GetTombstone("a")
+  // - ShouldDelete("b")
+  //
+  // @param key Internal key at which the client iterator is positioned
+  // @param seqno Max seqnum visible to the client iterator
+  PartialRangeTombstone GetTombstone(const ParsedInternalKey& parsed,
+                                     SequenceNumber seqno);
 
   void AddNewIter(TruncatedRangeDelIterator* iter,
                   const ParsedInternalKey& parsed) {
@@ -239,6 +259,10 @@ class ReverseRangeDelIterator {
 
     const InternalKeyComparator* icmp;
   };
+
+  // Moves the iterators backwards until they are at the first range tombstone
+  // ending after `parsed`.
+  void AdvanceTo(const ParsedInternalKey& parsed);
 
   void PushIter(TruncatedRangeDelIterator* iter,
                 const ParsedInternalKey& parsed) {
@@ -312,7 +336,8 @@ class RangeDelAggregator {
   // empty range of keys or the sequence number may be 0 to indicate that no
   // tombstone covers the specified key.
   virtual PartialRangeTombstone GetTombstone(const Slice& key,
-                                             SequenceNumber seqno) = 0;
+                                             SequenceNumber seqno,
+                                             RangeDelPositioningMode mode) = 0;
 
   virtual void InvalidateRangeDelMapPositions() = 0;
 
@@ -353,11 +378,13 @@ class RangeDelAggregator {
     bool ShouldDeleteRange(const Slice& start, const Slice& end,
                            SequenceNumber seqno);
 
-    // Get the range tombstone at the specified internal key and sequence
-    // number. A valid tombstone is always returned, though it may cover an
-    // empty range of keys or the sequence number may be 0 to indicate that no
-    // tombstone covers the specified key.
-    PartialRangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno);
+    // Gets a range tombstone for caching in the client iterator.
+    //
+    // @param key Internal key at which the client iterator is positioned
+    // @param seqno Max seqnum visible to the client iterator
+    // @param mode Direction of client iterator
+    PartialRangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno,
+                                       RangeDelPositioningMode mode);
 
     void Invalidate() {
       InvalidateForwardIter();
@@ -422,12 +449,14 @@ class ReadRangeDelAggregator final : public RangeDelAggregator {
   bool ShouldDeleteRange(const Slice& start, const Slice& end,
                          SequenceNumber seqno) override;
 
-  // Get the range tombstone at the specified internal key and sequence
-  // number. A valid tombstone is always returned, though it may cover an
-  // empty range of keys or the sequence number may be 0 to indicate that no
-  // tombstone covers the specified key.
+  // Gets a range tombstone for caching in the client iterator.
+  //
+  // @param key Internal key at which the client iterator is positioned
+  // @param seqno Max seqnum visible to the client iterator
+  // @param mode Direction of client iterator
   PartialRangeTombstone GetTombstone(const Slice& user_key,
-                                     SequenceNumber seqno) override;
+                                     SequenceNumber seqno,
+                                     RangeDelPositioningMode mode) override;
 
   bool IsRangeOverlapped(const Slice& start, const Slice& end);
 
@@ -461,12 +490,13 @@ class CompactionRangeDelAggregator : public RangeDelAggregator {
   bool ShouldDeleteRange(const Slice& start, const Slice& end,
                          SequenceNumber seqno) override;
 
-  // Get the range tombstone at the specified internal key and sequence
-  // number. A valid tombstone is always returned, though it may cover an
-  // empty range of keys or the sequence number may be 0 to indicate that no
-  // tombstone covers the specified key.
-  PartialRangeTombstone GetTombstone(const Slice& key,
-                                     SequenceNumber seqno) override;
+  // Gets a range tombstone for caching in the client iterator.
+  //
+  // @param key Internal key at which the client iterator is positioned
+  // @param seqno Max seqnum visible to the client iterator
+  // @param mode Direction of client iterator
+  PartialRangeTombstone GetTombstone(const Slice& key, SequenceNumber seqno,
+                                     RangeDelPositioningMode mode) override;
 
   bool IsRangeOverlapped(const Slice& start, const Slice& end);
 

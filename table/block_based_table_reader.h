@@ -705,7 +705,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
   // handling of the empty key for tombstone bounds). If we have a non-zero
   // sequence number the tombstone applies to all key sequence numbers within
   // the current file, allowing us to skip over a swath of deleted keys.
-  void InitRangeTombstone(const Slice& target);
+  void InitRangeTombstone(const Slice& target, RangeDelPositioningMode mode);
 
   std::string tombstone_internal_start_key() const;
   std::string tombstone_internal_end_key() const;
@@ -723,6 +723,9 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
   // will be nullptr to indicate the tombstone extends past the beginning or
   // end of the sstable.
   PartialRangeTombstone range_tombstone_;
+  bool range_tombstone_inited_ = false;
+  RangeDelPositioningMode range_tombstone_mode_ =
+      RangeDelPositioningMode::kForwardTraversal;
   InternalIteratorBase<BlockHandle>* index_iter_;
   PinnedIteratorsManager* pinned_iters_mgr_;
   TBlockIter block_iter_;

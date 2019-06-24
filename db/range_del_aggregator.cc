@@ -244,7 +244,7 @@ ReverseRangeDelIterator::ReverseRangeDelIterator(
       active_iters_(StartKeyMaxComparator(icmp)),
       inactive_iters_(EndKeyMaxComparator(icmp)) {}
 
-bool ReverseRangeDelIterator::ShouldDelete(const ParsedInternalKey& parsed) {
+void ReverseRangeDelIterator::AdvanceTo(const ParsedInternalKey& parsed) {
   // Move active iterators that start after parsed.
   while (!active_iters_.empty() &&
          icmp_->Compare(parsed, (*active_iters_.top())->start_key()) < 0) {
@@ -266,10 +266,33 @@ bool ReverseRangeDelIterator::ShouldDelete(const ParsedInternalKey& parsed) {
     PushIter(iter, parsed);
     assert(active_iters_.size() == active_seqnums_.size());
   }
+}
 
+bool ReverseRangeDelIterator::ShouldDelete(const ParsedInternalKey& parsed) {
+  AdvanceTo(parsed);
   return active_seqnums_.empty()
              ? false
              : (*active_seqnums_.begin())->seq() > parsed.sequence;
+}
+
+PartialRangeTombstone ReverseRangeDelIterator::GetTombstone(
+    const ParsedInternalKey& parsed, SequenceNumber seqno) {
+  AdvanceTo(parsed);
+  if (active_iters_.empty()) {
+    if (inactive_iters_.empty()) {
+      return PartialRangeTombstone();
+    }
+    // We are before the range tombstones. Cook a non-covering range tombstone
+    // (i.e., one with seqno zero) and pretend it ends where the real tombstones
+    // start.
+    ParsedInternalKey end_parsed = inactive_iters_.top()->end_key();
+    return PartialRangeTombstone(&end_parsed, nullptr, 0);
+  }
+  SequenceNumber tombstone_seqno = (*active_seqnums_.begin())->seq();
+  ParsedInternalKey start_parsed = (*active_seqnums_.begin())->start_key();
+  ParsedInternalKey end_parsed = (*active_seqnums_.begin())->end_key();
+  return PartialRangeTombstone(&start_parsed, &end_parsed,
+                               seqno < tombstone_seqno ? tombstone_seqno : 0);
 }
 
 void ReverseRangeDelIterator::Invalidate() {
@@ -330,11 +353,14 @@ bool RangeDelAggregator::StripeRep::ShouldDeleteRange(const Slice& start,
     return false;
   }
 
-  // TODO: there may be a way to avoid this `Invalidate()` if we exploit the
-  // traversal direction. For example, if this were a `kForwardTraversal`, and
-  // we knew `ShouldDeleteRange` could only be called on a range starting after
-  // the last point key checked using `ForwardRangeDelIterator::ShouldDelete`,
-  // we would not need to invalidate the forward iterator here.
+  // TODO: this could be implemented more simply by using `GetTombstone`.
+  // However, `GetTombstone()` currently does not return the largest possible
+  // end key that covers `seqno`. It is limited because it cannot advance its
+  // internal state beyond the key passed to `GetTombstone()`. If it supported
+  // lookahead and found the true maximum end key, we could use it here.
+  //
+  // For now, we use a brute-force implementation that invalidates all internal
+  // state before and after checking whether the range is covered.
   Invalidate();
   // Add all seen iterators. Maybe the range is fully covered by range
   // tombstones that have not yet been seen by the aggregator, in which case
@@ -349,26 +375,39 @@ bool RangeDelAggregator::StripeRep::ShouldDeleteRange(const Slice& start,
 }
 
 PartialRangeTombstone RangeDelAggregator::StripeRep::GetTombstone(
-    const Slice& key, SequenceNumber seqno) {
+    const Slice& key, SequenceNumber seqno, RangeDelPositioningMode mode) {
   ParsedInternalKey parsed_key;
   if (!ParseInternalKey(key, &parsed_key)) {
     assert(false);
     return PartialRangeTombstone();
   }
-  // TODO: there may be a way to avoid this `Invalidate()` if we exploit the
-  // traversal direction. For example, if this were a `kForwardTraversal`, and
-  // we knew `GetTombstone` could only be called on a key after the last point
-  // key checked using `ForwardRangeDelIterator::ShouldDelete`, we would not
-  // need to invalidate the forward iterator here.
-  Invalidate();
-  // Add all seen iterators.
-  for (auto it = iters_.begin(); it != iters_.end(); ++it) {
-    auto& iter = *it;
-    forward_iter_.AddNewIter(iter.get(), parsed_key);
+  switch (mode) {
+    case RangeDelPositioningMode::kForwardTraversal:
+      InvalidateReverseIter();
+
+      // Pick up previously unseen iterators.
+      for (auto it = std::next(iters_.begin(), forward_iter_.UnusedIdx());
+           it != iters_.end(); ++it, forward_iter_.IncUnusedIdx()) {
+        auto& iter = *it;
+        forward_iter_.AddNewIter(iter.get(), parsed_key);
+      }
+
+      return forward_iter_.GetTombstone(parsed_key, seqno);
+    case RangeDelPositioningMode::kBackwardTraversal:
+      InvalidateForwardIter();
+
+      // Pick up previously unseen iterators.
+      for (auto it = std::next(iters_.begin(), reverse_iter_.UnusedIdx());
+           it != iters_.end(); ++it, reverse_iter_.IncUnusedIdx()) {
+        auto& iter = *it;
+        reverse_iter_.AddNewIter(iter.get(), parsed_key);
+      }
+
+      return reverse_iter_.GetTombstone(parsed_key, seqno);
+    default:
+      assert(false);
+      return PartialRangeTombstone();
   }
-  auto res = forward_iter_.GetTombstone(parsed_key, seqno);
-  InvalidateForwardIter();
-  return res;
 }
 
 bool RangeDelAggregator::StripeRep::IsRangeOverlapped(const Slice& start,
@@ -432,8 +471,8 @@ bool ReadRangeDelAggregator::ShouldDeleteRange(const Slice& start,
 }
 
 PartialRangeTombstone ReadRangeDelAggregator::GetTombstone(
-    const Slice& key, SequenceNumber seqno) {
-  return rep_.GetTombstone(key, seqno);
+    const Slice& key, SequenceNumber seqno, RangeDelPositioningMode mode) {
+  return rep_.GetTombstone(key, seqno, mode);
 }
 
 bool ReadRangeDelAggregator::IsRangeOverlapped(const Slice& start,
@@ -487,7 +526,8 @@ bool CompactionRangeDelAggregator::ShouldDeleteRange(
 }
 
 PartialRangeTombstone CompactionRangeDelAggregator::GetTombstone(
-    const Slice& /* key */, SequenceNumber /* seqno */) {
+    const Slice& /* key */, SequenceNumber /* seqno */,
+    RangeDelPositioningMode /* mode */) {
   // This is a bit tricky to preserve snapshot correctness. For now, leave the
   // optimization unimplemented for compaction.
   return PartialRangeTombstone();
