@@ -695,7 +695,6 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
   void InitDataBlock();
   inline void FindKeyForward();
   void FindBlockForward();
-  void FindTombstoneEndForward();
   void FindKeyBackward();
   void CheckOutOfBound();
 
@@ -717,15 +716,13 @@ class BlockBasedTableIterator : public InternalIteratorBase<TValue> {
   UserComparatorWrapper user_comparator_;
   RangeDelAggregator* const range_del_agg_;
   const FileMetaData* const file_meta_;
-  // The range tombstone that covers the current key. Note that this is a
-  // cooked value, not the raw partial tombstone as retrieved from
-  // RangeDelAggregator::GetTombstone(). In particular, the start and end keys
-  // will be nullptr to indicate the tombstone extends past the beginning or
-  // end of the sstable.
-  PartialRangeTombstone range_tombstone_;
-  bool range_tombstone_inited_ = false;
-  RangeDelPositioningMode range_tombstone_mode_ =
-      RangeDelPositioningMode::kForwardTraversal;
+  // The endpoint of the range tombstone that covers the current key. Note that
+  // this is a cooked value, not the raw tombstone endpoint as retrieved from
+  // `RangeDelAggregator::GetEndpoint()`. In particular, the endpoint will be
+  // nullptr to indicate the tombstone extends past the beginning or end of the
+  // sstable, depending on `dir()`.
+  PartialRangeTombstoneEndpoint range_tombstone_endpoint_;
+  bool range_tombstone_endpoint_inited_ = false;
   InternalIteratorBase<BlockHandle>* index_iter_;
   PinnedIteratorsManager* pinned_iters_mgr_;
   TBlockIter block_iter_;

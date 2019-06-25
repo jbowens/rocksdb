@@ -949,6 +949,10 @@ TEST_F(DBRangeDelTest, IteratorRangeTombstoneOverlapsSstable) {
 }
 
 TEST_F(DBRangeDelTest, IteratorRangeTombstoneMultipleBlocks) {
+  // Verify that BlockBasedTableIterator repopulates its data block cache after
+  // skipping over a range tombstone that spans into a different data block.
+  // This test exposes a bug that was both introduced and fixed during the
+  // development of the range tombstone skipping optimization.
   Options options = CurrentOptions();
   BlockBasedTableOptions table_options;
   table_options.block_size = 1024;
@@ -963,11 +967,6 @@ TEST_F(DBRangeDelTest, IteratorRangeTombstoneMultipleBlocks) {
   ASSERT_OK(db_->Flush(FlushOptions()));
   db_->CompactRange(CompactRangeOptions(), nullptr, nullptr);
 
-  // This test exercises a bookkeeping issue discovered in the
-  // BlockBasedTableIterator. In short, a range tombstone spanning keys in
-  // multiple data blocks could cause the iterator to incorrectly reuse its
-  // cached data block when it in fact needed to fetch a new data block.
-  //
   // The goal is to force BlockBasedTableIterator::FindKeyForward and
   // BlockBasedTableIterator::FindKeyBackward to seek between data blocks, which
   // occurs when Next or Prev advances to a key covered by a range tombstone.

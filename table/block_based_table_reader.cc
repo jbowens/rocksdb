@@ -2341,7 +2341,7 @@ void BlockBasedTableIterator<TBlockIter, TValue>::Seek(
   // Before we seek the iterator, find the next non-deleted key.
   InitRangeTombstone(target, RangeDelPositioningMode::kForwardTraversal);
   std::string tmp_target;
-  if (range_tombstone_.seq() > 0) {
+  if (range_tombstone_endpoint_.seq() > 0) {
     tmp_target = tombstone_internal_end_key();
     target = tmp_target;
   }
@@ -2382,7 +2382,7 @@ void BlockBasedTableIterator<TBlockIter, TValue>::SeekForPrev(
   // Before we seek the iterator, find the previous non-deleted key.
   InitRangeTombstone(target, RangeDelPositioningMode::kBackwardTraversal);
   std::string tmp_target;
-  if (range_tombstone_.seq() > 0) {
+  if (range_tombstone_endpoint_.seq() > 0) {
     tmp_target = tombstone_internal_start_key();
     target = tmp_target;
   }
@@ -2435,7 +2435,7 @@ void BlockBasedTableIterator<TBlockIter, TValue>::SeekToFirst() {
   block_iter_.SeekToFirst();
   FindKeyForward();
   CheckOutOfBound();
-  range_tombstone_inited_ = false;
+  range_tombstone_endpoint_inited_ = false;
 }
 
 template <class TBlockIter, typename TValue>
@@ -2450,21 +2450,23 @@ void BlockBasedTableIterator<TBlockIter, TValue>::SeekToLast() {
   InitDataBlock();
   block_iter_.SeekToLast();
   FindKeyBackward();
-  range_tombstone_inited_ = false;
+  range_tombstone_endpoint_inited_ = false;
 }
 
 template <class TBlockIter, typename TValue>
 void BlockBasedTableIterator<TBlockIter, TValue>::Next() {
   assert(block_iter_points_to_real_block_);
   bool refresh_tombstone = false;
-  if (!range_tombstone_inited_ ||
-      range_tombstone_mode_ != RangeDelPositioningMode::kForwardTraversal) {
+  if (!range_tombstone_endpoint_inited_ ||
+      range_tombstone_endpoint_.dir() !=
+          RangeDelPositioningMode::kForwardTraversal) {
     refresh_tombstone = true;
-  } else if (range_tombstone_.end_key() != nullptr) {
+  } else if (range_tombstone_endpoint_.endpoint() != nullptr) {
     ParsedInternalKey parsed;
     if (!ParseInternalKey(key(), &parsed)) {
       assert(false);
-    } else if (icomp_.Compare(*range_tombstone_.end_key(), parsed) <= 0) {
+    } else if (icomp_.Compare(*range_tombstone_endpoint_.endpoint(), parsed) <=
+               0) {
       refresh_tombstone = true;
     }
   }
@@ -2473,9 +2475,9 @@ void BlockBasedTableIterator<TBlockIter, TValue>::Next() {
   }
 
   if (file_meta_ != nullptr &&
-      range_tombstone_.seq() > file_meta_->fd.largest_seqno) {
+      range_tombstone_endpoint_.seq() > file_meta_->fd.largest_seqno) {
     auto end_key = tombstone_internal_end_key();
-    assert(range_tombstone_inited_ && icomp_.Compare(key(), end_key) < 0);
+    assert(icomp_.Compare(key(), end_key) < 0);
     // We know a range tombstone covers the swath of keys between the current
     // key and `end_key`. We can skip over all the keys in between.
     SavePrevIndexValue();
@@ -2507,14 +2509,16 @@ template <class TBlockIter, typename TValue>
 void BlockBasedTableIterator<TBlockIter, TValue>::Prev() {
   assert(block_iter_points_to_real_block_);
   bool refresh_tombstone = false;
-  if (!range_tombstone_inited_ ||
-      range_tombstone_mode_ != RangeDelPositioningMode::kBackwardTraversal) {
+  if (!range_tombstone_endpoint_inited_ ||
+      range_tombstone_endpoint_.dir() !=
+          RangeDelPositioningMode::kBackwardTraversal) {
     refresh_tombstone = true;
-  } else if (range_tombstone_.start_key() != nullptr) {
+  } else if (range_tombstone_endpoint_.endpoint() != nullptr) {
     ParsedInternalKey parsed;
     if (!ParseInternalKey(key(), &parsed)) {
       assert(false);
-    } else if (icomp_.Compare(parsed, *range_tombstone_.start_key()) < 0) {
+    } else if (icomp_.Compare(parsed, *range_tombstone_endpoint_.endpoint()) <
+               0) {
       refresh_tombstone = true;
     }
   }
@@ -2523,12 +2527,13 @@ void BlockBasedTableIterator<TBlockIter, TValue>::Prev() {
   }
 
   if (file_meta_ != nullptr &&
-      range_tombstone_.seq() > file_meta_->fd.largest_seqno) {
+      range_tombstone_endpoint_.seq() > file_meta_->fd.largest_seqno) {
     auto start_key = tombstone_internal_start_key();
-    assert(range_tombstone_inited_ &&
-           (range_tombstone_.start_key() == nullptr ||
-            user_comparator_.Compare(
-                range_tombstone_.start_key()->user_key, user_key()) <= 0));
+    assert(
+        range_tombstone_endpoint_inited_ &&
+        (range_tombstone_endpoint_.endpoint() == nullptr ||
+         user_comparator_.Compare(
+             range_tombstone_endpoint_.endpoint()->user_key, user_key()) <= 0));
     // We know a range tombstone covers the swath of keys between the current
     // key and `start_key`. We can skip over all the keys in between.
     if (icomp_.Compare(key(), start_key) <= 0) {
@@ -2538,9 +2543,9 @@ void BlockBasedTableIterator<TBlockIter, TValue>::Prev() {
       //
       // This special case exists because there can be a gap between
       // `tombstone_internal_start_key()`, which gets assigned the range
-      // tombstone's seqnum, and `GetTombstone()`'s start key, which gets
-      // assigned `kMaxSeqnum` unless truncated at a file endpoint. To handle
-      // this gap, we simply iterate backwards with `Prev()` when we are in it.
+      // tombstone's seqnum, and `GetEndpoint()`'s key, which gets assigned
+      // `kMaxSeqnum` unless truncated at a file endpoint. To handle this gap,
+      // we simply iterate backwards with `Prev()` when we are in it.
       block_iter_.Prev();
     } else {
       SavePrevIndexValue();
@@ -2712,31 +2717,35 @@ void BlockBasedTableIterator<TBlockIter, TValue>::InitRangeTombstone(
     return;
   }
 
-  range_tombstone_ =
-      range_del_agg_->GetTombstone(target, file_meta_->fd.largest_seqno, mode);
+  range_tombstone_endpoint_ =
+      range_del_agg_->GetEndpoint(target, file_meta_->fd.largest_seqno, mode);
 
-  // Clear the start key if it is less than the smallest key in the
-  // sstable. This allows us to avoid comparisons during Prev() in the common
-  // case.
-  if (range_tombstone_.start_key() != nullptr) {
-    ParsedInternalKey smallest;
-    if (!ParseInternalKey(file_meta_->smallest.Encode(), &smallest) ||
-        (icomp_.Compare(*range_tombstone_.start_key(), smallest) < 0)) {
-      range_tombstone_.SetStartKey(nullptr);
+  if (range_tombstone_endpoint_.endpoint() != nullptr) {
+    // Clear the start key if it is less than the smallest key in the
+    // sstable. This allows us to avoid comparisons during Prev() in the common
+    // case.
+    if (mode == RangeDelPositioningMode::kBackwardTraversal) {
+      ParsedInternalKey smallest;
+      if (!ParseInternalKey(file_meta_->smallest.Encode(), &smallest) ||
+          (icomp_.Compare(*range_tombstone_endpoint_.endpoint(), smallest) <
+           0)) {
+        range_tombstone_endpoint_.SetEndpoint(nullptr, mode);
+      }
+    }
+    // Clear the end key if it is larger than the largest key in the
+    // sstable. This allows us to avoid comparisons during Next() in the common
+    // case.
+    if (mode == RangeDelPositioningMode::kForwardTraversal) {
+      ParsedInternalKey largest;
+      if (!ParseInternalKey(file_meta_->largest.Encode(), &largest) ||
+          (icomp_.Compare(*range_tombstone_endpoint_.endpoint(), largest) >
+           0)) {
+        range_tombstone_endpoint_.SetEndpoint(nullptr, mode);
+      }
     }
   }
-  // Clear the end key if it is larger than the largest key in the
-  // sstable. This allows us to avoid comparisons during Next() in the common
-  // case.
-  if (range_tombstone_.end_key() != nullptr) {
-    ParsedInternalKey largest;
-    if (!ParseInternalKey(file_meta_->largest.Encode(), &largest) ||
-        (icomp_.Compare(*range_tombstone_.end_key(), largest) > 0)) {
-      range_tombstone_.SetEndKey(nullptr);
-    }
-  }
-  range_tombstone_inited_ = true;
-  range_tombstone_mode_ = mode;
+  range_tombstone_endpoint_inited_ = true;
+  assert(range_tombstone_endpoint_.dir() == mode);
 }
 
 template <class TBlockIter, typename TValue>
@@ -2751,15 +2760,19 @@ void BlockBasedTableIterator<TBlockIter, TValue>::CheckOutOfBound() {
 template <class TBlockIter, typename TValue>
 std::string BlockBasedTableIterator<
     TBlockIter, TValue>::tombstone_internal_start_key() const {
+  assert(range_tombstone_endpoint_inited_);
+  assert(range_tombstone_endpoint_.dir() ==
+         RangeDelPositioningMode::kBackwardTraversal);
   std::string internal_key;
-  if (range_tombstone_.start_key() == nullptr) {
+  if (range_tombstone_endpoint_.endpoint() == nullptr) {
     // Make sure the key is before the file as nullptr indicates the range
     // tombstone covers everything to the left.
     AppendInternalKey(&internal_key, {file_meta_->smallest.user_key(),
                                       kMaxSequenceNumber, kTypeValue});
   } else {
-    AppendInternalKey(&internal_key, {range_tombstone_.start_key()->user_key,
-                                      range_tombstone_.seq(), kTypeValue});
+    AppendInternalKey(&internal_key,
+                      {range_tombstone_endpoint_.endpoint()->user_key,
+                       range_tombstone_endpoint_.seq(), kTypeValue});
   }
   return internal_key;
 }
@@ -2767,8 +2780,11 @@ std::string BlockBasedTableIterator<
 template <class TBlockIter, typename TValue>
 std::string BlockBasedTableIterator<
     TBlockIter, TValue>::tombstone_internal_end_key() const {
+  assert(range_tombstone_endpoint_inited_);
+  assert(range_tombstone_endpoint_.dir() ==
+         RangeDelPositioningMode::kForwardTraversal);
   std::string internal_key;
-  if (range_tombstone_.end_key() == nullptr) {
+  if (range_tombstone_endpoint_.endpoint() == nullptr) {
     // Make sure the key is after the file as nullptr indicates the range
     // tombstone covers everything to the right.
     AppendInternalKey(&internal_key,
@@ -2779,8 +2795,9 @@ std::string BlockBasedTableIterator<
     // kMaxSequenceNumber ensures we'll seek to a version of the key that is
     // more recent than the tombstone. Note that the tombstone end-key is
     // exclusive, so the tombstone doesn't apply to the end-key in any case.
-    AppendInternalKey(&internal_key, {range_tombstone_.end_key()->user_key,
-                                      kMaxSequenceNumber, kTypeValue});
+    AppendInternalKey(&internal_key,
+                      {range_tombstone_endpoint_.endpoint()->user_key,
+                       kMaxSequenceNumber, kTypeValue});
   }
   return internal_key;
 }
