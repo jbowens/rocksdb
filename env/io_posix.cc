@@ -118,7 +118,32 @@ size_t GetLogicalBufferSize(int __attribute__((__unused__)) fd) {
 #endif
   return kDefaultPageSize;
 }
-} //  namespace
+
+#ifdef ROCKSDB_RANGESYNC_PRESENT
+
+bool IsSyncFileRangeSupported(int fd) {
+  // The approach taken in this function is to build a blacklist of cases where
+  // we know `sync_file_range` definitely will not work properly despite passing
+  // the compile-time check (`ROCKSDB_RANGESYNC_PRESENT`). If we are unsure, or
+  // if any of the checks fail in unexpected ways, we allow `sync_file_range` to
+  // be used. This way should minimize risk of impacting existing use cases.
+  int ret = sync_file_range(fd, 0 /* offset */, 0 /* nbytes */, 0 /* flags */);
+  assert(!(ret == -1 && errno != ENOSYS));
+  if (ret == -1 && errno == ENOSYS) {
+    // `sync_file_range` is not implemented on all platforms even if
+    // compile-time checks pass and a supported filesystem is in-use. For
+    // example, using ext4 on WSL (Windows Subsystem for Linux),
+    // `sync_file_range()` returns `ENOSYS`
+    // ("Function not implemented").
+    return false;
+  }
+  // None of the cases on the blacklist matched, so allow `sync_file_range` use.
+  return true;
+}
+
+#endif  // ROCKSDB_RANGESYNC_PRESENT
+
+}  // anonymous namespace
 
 /*
  * DirectIOHelper
@@ -737,6 +762,9 @@ PosixWritableFile::PosixWritableFile(const std::string& fname, int fd,
   allow_fallocate_ = options.allow_fallocate;
   fallocate_with_keep_size_ = options.fallocate_with_keep_size;
 #endif
+#ifdef ROCKSDB_RANGESYNC_PRESENT
+  sync_file_range_supported_ = IsSyncFileRangeSupported(fd_);
+#endif  // ROCKSDB_RANGESYNC_PRESENT
   assert(!options.use_mmap_writes);
 }
 
@@ -943,14 +971,18 @@ Status PosixWritableFile::Allocate(uint64_t offset, uint64_t len) {
 Status PosixWritableFile::RangeSync(uint64_t offset, uint64_t nbytes) {
   assert(offset <= std::numeric_limits<off_t>::max());
   assert(nbytes <= std::numeric_limits<off_t>::max());
-  if (sync_file_range(fd_, static_cast<off_t>(offset),
-      static_cast<off_t>(nbytes), SYNC_FILE_RANGE_WRITE) == 0) {
-    return Status::OK();
-  } else {
-    return IOError("While sync_file_range offset " + ToString(offset) +
-                       " bytes " + ToString(nbytes),
-                   filename_, errno);
+  if (sync_file_range_supported_) {
+    if (sync_file_range(fd_, static_cast<off_t>(offset),
+                        static_cast<off_t>(nbytes),
+                        SYNC_FILE_RANGE_WRITE) == 0) {
+      return Status::OK();
+    } else {
+      return IOError("While sync_file_range offset " + ToString(offset) +
+                         " bytes " + ToString(nbytes),
+                     filename_, errno);
+    }
   }
+  return Status::OK();
 }
 #endif
 
