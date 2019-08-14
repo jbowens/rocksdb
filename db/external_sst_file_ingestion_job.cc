@@ -305,7 +305,9 @@ Status ExternalSstFileIngestionJob::GetIngestedFileInfo(
       TableReaderOptions(*cfd_->ioptions(),
                          sv->mutable_cf_options.prefix_extractor.get(),
                          env_options_, cfd_->internal_comparator()),
-      std::move(sst_file_reader), file_to_ingest->file_size, &table_reader);
+      std::move(sst_file_reader), file_to_ingest->file_size, &table_reader,
+      false /* prefetch_index_and_filter_in_cache */,
+      false /* fill_cache_with_range_del_blocks */);
   if (!status.ok()) {
     return status;
   }
