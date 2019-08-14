@@ -340,12 +340,12 @@ class TestPlainTableFactory : public PlainTableFactory {
       const TableReaderOptions& table_reader_options,
       std::unique_ptr<RandomAccessFileReader>&& file, uint64_t file_size,
       std::unique_ptr<TableReader>* table,
-      bool /*prefetch_index_and_filter_in_cache*/) const override {
+      bool /*prefetch_index_and_filter_in_cache*/,
+      bool /*fill_cache_with_range_del_blocks*/) const override {
     TableProperties* props = nullptr;
-    auto s =
-        ReadTableProperties(file.get(), file_size, kPlainTableMagicNumber,
-                            table_reader_options.ioptions, &props,
-                            true /* compression_type_missing */);
+    auto s = ReadTableProperties(file.get(), file_size, kPlainTableMagicNumber,
+                                 table_reader_options.ioptions, &props,
+                                 true /* compression_type_missing */);
     EXPECT_TRUE(s.ok());
 
     if (store_index_in_file_) {

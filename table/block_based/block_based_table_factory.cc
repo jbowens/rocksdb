@@ -196,15 +196,16 @@ Status BlockBasedTableFactory::NewTableReader(
     const TableReaderOptions& table_reader_options,
     std::unique_ptr<RandomAccessFileReader>&& file, uint64_t file_size,
     std::unique_ptr<TableReader>* table_reader,
-    bool prefetch_index_and_filter_in_cache) const {
+    bool prefetch_index_and_filter_in_cache,
+    bool fill_cache_with_range_del_blocks) const {
   return BlockBasedTable::Open(
       table_reader_options.ioptions, table_reader_options.env_options,
       table_options_, table_reader_options.internal_comparator, std::move(file),
       file_size, table_reader, table_reader_options.prefix_extractor,
-      prefetch_index_and_filter_in_cache, table_reader_options.skip_filters,
-      table_reader_options.level, table_reader_options.immortal,
-      table_reader_options.largest_seqno, &tail_prefetch_stats_,
-      table_reader_options.block_cache_tracer);
+      prefetch_index_and_filter_in_cache, fill_cache_with_range_del_blocks,
+      table_reader_options.skip_filters, table_reader_options.level,
+      table_reader_options.immortal, table_reader_options.largest_seqno,
+      &tail_prefetch_stats_, table_reader_options.block_cache_tracer);
 }
 
 TableBuilder* BlockBasedTableFactory::NewTableBuilder(

@@ -1133,7 +1133,8 @@ Status BlockBasedTable::Open(
     std::unique_ptr<RandomAccessFileReader>&& file, uint64_t file_size,
     std::unique_ptr<TableReader>* table_reader,
     const SliceTransform* prefix_extractor,
-    const bool prefetch_index_and_filter_in_cache, const bool skip_filters,
+    const bool prefetch_index_and_filter_in_cache,
+    const bool fill_cache_with_range_del_blocks, const bool skip_filters,
     const int level, const bool immortal_table,
     const SequenceNumber largest_seqno, TailPrefetchStats* tail_prefetch_stats,
     BlockCacheTracer* const block_cache_tracer) {
@@ -1215,8 +1216,9 @@ Status BlockBasedTable::Open(
   if (!s.ok()) {
     return s;
   }
-  s = new_table->ReadRangeDelBlock(prefetch_buffer.get(), meta_iter.get(),
-                                   internal_comparator, &lookup_context);
+  s = new_table->ReadRangeDelBlock(
+      prefetch_buffer.get(), meta_iter.get(), internal_comparator,
+      fill_cache_with_range_del_blocks, &lookup_context);
   if (!s.ok()) {
     return s;
   }
@@ -1444,6 +1446,7 @@ Status BlockBasedTable::ReadPropertiesBlock(
 Status BlockBasedTable::ReadRangeDelBlock(
     FilePrefetchBuffer* prefetch_buffer, InternalIterator* meta_iter,
     const InternalKeyComparator& internal_comparator,
+    const bool fill_cache_with_range_del_blocks,
     BlockCacheLookupContext* lookup_context) {
   Status s;
   bool found_range_del_block;
@@ -1456,6 +1459,7 @@ Status BlockBasedTable::ReadRangeDelBlock(
         s.ToString().c_str());
   } else if (found_range_del_block && !range_del_handle.IsNull()) {
     ReadOptions read_options;
+    read_options.fill_cache = fill_cache_with_range_del_blocks;
     std::unique_ptr<InternalIterator> iter(NewDataBlockIterator<DataBlockIter>(
         read_options, range_del_handle,
         /*input_iter=*/nullptr, BlockType::kRangeDeletion,
