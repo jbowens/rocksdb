@@ -777,6 +777,7 @@ Status BlockBasedTable::Open(const ImmutableCFOptions& ioptions,
                              std::unique_ptr<TableReader>* table_reader,
                              const SliceTransform* prefix_extractor,
                              const bool prefetch_index_and_filter_in_cache,
+                             const bool fill_cache_with_range_del_blocks,
                              const bool skip_filters, const int level,
                              const bool immortal_table,
                              const SequenceNumber largest_seqno,
@@ -857,7 +858,8 @@ Status BlockBasedTable::Open(const ImmutableCFOptions& ioptions,
     return s;
   }
   s = ReadRangeDelBlock(rep, prefetch_buffer.get(), meta_iter.get(),
-                        internal_comparator);
+                        internal_comparator,
+                        fill_cache_with_range_del_blocks);
   if (!s.ok()) {
     return s;
   }
@@ -1065,7 +1067,8 @@ Status BlockBasedTable::ReadPropertiesBlock(
 
 Status BlockBasedTable::ReadRangeDelBlock(
     Rep* rep, FilePrefetchBuffer* prefetch_buffer, InternalIterator* meta_iter,
-    const InternalKeyComparator& internal_comparator) {
+    const InternalKeyComparator& internal_comparator,
+    const bool fill_cache_with_range_del_blocks) {
   Status s;
   bool found_range_del_block;
   BlockHandle range_del_handle;
@@ -1077,6 +1080,7 @@ Status BlockBasedTable::ReadRangeDelBlock(
         s.ToString().c_str());
   } else if (found_range_del_block && !range_del_handle.IsNull()) {
     ReadOptions read_options;
+    read_options.fill_cache = fill_cache_with_range_del_blocks;
     std::unique_ptr<InternalIterator> iter(NewDataBlockIterator<DataBlockIter>(
         rep, read_options, range_del_handle, nullptr /* input_iter */,
         false /* is_index */, true /* key_includes_seq */,

@@ -95,6 +95,7 @@ class BlockBasedTable : public TableReader {
                      std::unique_ptr<TableReader>* table_reader,
                      const SliceTransform* prefix_extractor = nullptr,
                      bool prefetch_index_and_filter_in_cache = true,
+                     bool fill_cache_with_range_del_blocks = true,
                      bool skip_filters = false, int level = -1,
                      const bool immortal_table = false,
                      const SequenceNumber largest_seqno = 0,
@@ -385,7 +386,8 @@ class BlockBasedTable : public TableReader {
   static Status ReadRangeDelBlock(
       Rep* rep, FilePrefetchBuffer* prefetch_buffer,
       InternalIterator* meta_iter,
-      const InternalKeyComparator& internal_comparator);
+      const InternalKeyComparator& internal_comparator,
+      bool fill_cache_with_range_del_blocks);
   static Status ReadCompressionDictBlock(
       Rep* rep, FilePrefetchBuffer* prefetch_buffer,
       std::unique_ptr<const BlockContents>* compression_dict_block);

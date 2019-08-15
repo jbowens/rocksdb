@@ -151,7 +151,8 @@ class PlainTableFactory : public TableFactory {
   Status NewTableReader(const TableReaderOptions& table_reader_options,
                         std::unique_ptr<RandomAccessFileReader>&& file,
                         uint64_t file_size, std::unique_ptr<TableReader>* table,
-                        bool prefetch_index_and_filter_in_cache) const override;
+                        bool prefetch_index_and_filter_in_cache,
+                        bool fill_cache_with_range_del_blocks) const override;
 
   TableBuilder* NewTableBuilder(
       const TableBuilderOptions& table_builder_options,

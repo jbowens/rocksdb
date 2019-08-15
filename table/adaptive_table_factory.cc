@@ -45,7 +45,8 @@ Status AdaptiveTableFactory::NewTableReader(
     const TableReaderOptions& table_reader_options,
     std::unique_ptr<RandomAccessFileReader>&& file, uint64_t file_size,
     std::unique_ptr<TableReader>* table,
-    bool /*prefetch_index_and_filter_in_cache*/) const {
+    bool /*prefetch_index_and_filter_in_cache*/,
+    bool /*fill_cache_with_range_del_blocks*/) const {
   Footer footer;
   auto s = ReadFooterFromFile(file.get(), nullptr /* prefetch_buffer */,
                               file_size, &footer);
