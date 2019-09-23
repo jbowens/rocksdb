@@ -243,6 +243,7 @@ elseif(FORCE_SSE42)
   message(FATAL_ERROR "FORCE_SSE42=ON but unable to compile with SSE4.2 enabled")
 endif()
 
+if(NOT MINGW)
 CHECK_CXX_SOURCE_COMPILES("
 #if defined(_MSC_VER) && !defined(__thread)
 #define __thread __declspec(thread)
@@ -253,6 +254,7 @@ int main() {
 " HAVE_THREAD_LOCAL)
 if(HAVE_THREAD_LOCAL)
   add_definitions(-DROCKSDB_SUPPORT_THREAD_LOCAL)
+endif()
 endif()
 
 option(FAIL_ON_WARNINGS "Treat compile warnings as errors" ON)
