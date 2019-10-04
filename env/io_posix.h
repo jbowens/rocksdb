@@ -47,11 +47,6 @@ static Status IOError(const std::string& context, const std::string& file_name,
   }
 }
 
-class PosixHelper {
- public:
-  static size_t GetUniqueIdFromFile(int fd, char* id, size_t max_size);
-};
-
 class PosixSequentialFile : public SequentialFile {
  private:
   std::string filename_;
@@ -93,9 +88,6 @@ class PosixRandomAccessFile : public RandomAccessFile {
 
   virtual Status Prefetch(uint64_t offset, size_t n) override;
 
-#if defined(OS_LINUX) || defined(OS_MACOSX) || defined(OS_AIX)
-  virtual size_t GetUniqueId(char* id, size_t max_size) const override;
-#endif
   virtual void Hint(AccessPattern pattern) override;
   virtual Status InvalidateCache(size_t offset, size_t length) override;
   virtual bool use_direct_io() const override { return use_direct_io_; }
@@ -148,9 +140,6 @@ class PosixWritableFile : public WritableFile {
 #endif
 #ifdef ROCKSDB_RANGESYNC_PRESENT
   virtual Status RangeSync(uint64_t offset, uint64_t nbytes) override;
-#endif
-#ifdef OS_LINUX
-  virtual size_t GetUniqueId(char* id, size_t max_size) const override;
 #endif
 };
 
