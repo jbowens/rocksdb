@@ -61,8 +61,6 @@ Status fallocate(const std::string& filename, HANDLE hFile, uint64_t to_size);
 
 Status ftruncate(const std::string& filename, HANDLE hFile, uint64_t toSize);
 
-size_t GetUniqueIdFromFile(HANDLE hFile, char* id, size_t max_size);
-
 class WinFileData {
  protected:
   const std::string filename_;
@@ -148,8 +146,6 @@ class WinMmapReadableFile : private WinFileData, public RandomAccessFile {
                       char* scratch) const override;
 
   virtual Status InvalidateCache(size_t offset, size_t length) override;
-
-  virtual size_t GetUniqueId(char* id, size_t max_size) const override;
 };
 
 // We preallocate and use memcpy to append new
@@ -230,8 +226,6 @@ class WinMmapFile : private WinFileData, public WritableFile {
   virtual Status InvalidateCache(size_t offset, size_t length) override;
 
   virtual Status Allocate(uint64_t offset, uint64_t len) override;
-
-  virtual size_t GetUniqueId(char* id, size_t max_size) const override;
 };
 
 class WinRandomAccessImpl {
@@ -273,8 +267,6 @@ class WinRandomAccessFile
 
   virtual Status Read(uint64_t offset, size_t n, Slice* result,
                       char* scratch) const override;
-
-  virtual size_t GetUniqueId(char* id, size_t max_size) const override;
 
   virtual bool use_direct_io() const override { return WinFileData::use_direct_io(); }
 
@@ -379,8 +371,6 @@ class WinWritableFile : private WinFileData,
   virtual uint64_t GetFileSize() override;
 
   virtual Status Allocate(uint64_t offset, uint64_t len) override;
-
-  virtual size_t GetUniqueId(char* id, size_t max_size) const override;
 };
 
 class WinRandomRWFile : private WinFileData,
@@ -432,8 +422,6 @@ class WinDirectory : public Directory {
     ::CloseHandle(handle_);
   }
   virtual Status Fsync() override;
-
-  size_t GetUniqueId(char* id, size_t max_size) const override;
 };
 
 class WinFileLock : public FileLock {
