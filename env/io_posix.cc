@@ -239,59 +239,6 @@ Status PosixSequentialFile::InvalidateCache(size_t offset, size_t length) {
 
 /*
  * PosixRandomAccessFile
- */
-#if defined(OS_LINUX)
-size_t PosixHelper::GetUniqueIdFromFile(int fd, char* id, size_t max_size) {
-  if (max_size < kMaxVarint64Length * 3) {
-    return 0;
-  }
-
-  struct stat buf;
-  int result = fstat(fd, &buf);
-  assert(result != -1);
-  if (result == -1) {
-    return 0;
-  }
-
-  long version = 0;
-  result = ioctl(fd, FS_IOC_GETVERSION, &version);
-  TEST_SYNC_POINT_CALLBACK("GetUniqueIdFromFile:FS_IOC_GETVERSION", &result);
-  if (result == -1) {
-    return 0;
-  }
-  uint64_t uversion = (uint64_t)version;
-
-  char* rid = id;
-  rid = EncodeVarint64(rid, buf.st_dev);
-  rid = EncodeVarint64(rid, buf.st_ino);
-  rid = EncodeVarint64(rid, uversion);
-  assert(rid >= id);
-  return static_cast<size_t>(rid - id);
-}
-#endif
-
-#if defined(OS_MACOSX) || defined(OS_AIX)
-size_t PosixHelper::GetUniqueIdFromFile(int fd, char* id, size_t max_size) {
-  if (max_size < kMaxVarint64Length * 3) {
-    return 0;
-  }
-
-  struct stat buf;
-  int result = fstat(fd, &buf);
-  if (result == -1) {
-    return 0;
-  }
-
-  char* rid = id;
-  rid = EncodeVarint64(rid, buf.st_dev);
-  rid = EncodeVarint64(rid, buf.st_ino);
-  rid = EncodeVarint64(rid, buf.st_gen);
-  assert(rid >= id);
-  return static_cast<size_t>(rid - id);
-}
-#endif
-/*
- * PosixRandomAccessFile
  *
  * pread() based random-access
  */
@@ -367,12 +314,6 @@ Status PosixRandomAccessFile::Prefetch(uint64_t offset, size_t n) {
   }
   return s;
 }
-
-#if defined(OS_LINUX) || defined(OS_MACOSX) || defined(OS_AIX)
-size_t PosixRandomAccessFile::GetUniqueId(char* id, size_t max_size) const {
-  return PosixHelper::GetUniqueIdFromFile(fd_, id, max_size);
-}
-#endif
 
 void PosixRandomAccessFile::Hint(AccessPattern pattern) {
   if (use_direct_io()) {
@@ -908,12 +849,6 @@ Status PosixWritableFile::RangeSync(uint64_t offset, uint64_t nbytes) {
                        " bytes " + ToString(nbytes),
                    filename_, errno);
   }
-}
-#endif
-
-#ifdef OS_LINUX
-size_t PosixWritableFile::GetUniqueId(char* id, size_t max_size) const {
-  return PosixHelper::GetUniqueIdFromFile(fd_, id, max_size);
 }
 #endif
 

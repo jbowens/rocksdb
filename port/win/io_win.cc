@@ -152,33 +152,6 @@ Status ftruncate(const std::string& filename, HANDLE hFile,
   return status;
 }
 
-size_t GetUniqueIdFromFile(HANDLE hFile, char* id, size_t max_size) {
-
-  if (max_size < kMaxVarint64Length * 3) {
-    return 0;
-  }
-
-  // This function has to be re-worked for cases when
-  // ReFS file system introduced on Windows Server 2012 is used
-  BY_HANDLE_FILE_INFORMATION FileInfo;
-
-  BOOL result = GetFileInformationByHandle(hFile, &FileInfo);
-
-  TEST_SYNC_POINT_CALLBACK("GetUniqueIdFromFile:FS_IOC_GETVERSION", &result);
-
-  if (!result) {
-    return 0;
-  }
-
-  char* rid = id;
-  rid = EncodeVarint64(rid, uint64_t(FileInfo.dwVolumeSerialNumber));
-  rid = EncodeVarint64(rid, uint64_t(FileInfo.nFileIndexHigh));
-  rid = EncodeVarint64(rid, uint64_t(FileInfo.nFileIndexLow));
-
-  assert(rid >= id);
-  return static_cast<size_t>(rid - id);
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // WinMmapReadableFile
 
@@ -218,10 +191,6 @@ Status WinMmapReadableFile::Read(uint64_t offset, size_t n, Slice* result,
 
 Status WinMmapReadableFile::InvalidateCache(size_t offset, size_t length) {
   return Status::OK();
-}
-
-size_t WinMmapReadableFile::GetUniqueId(char* id, size_t max_size) const {
-  return GetUniqueIdFromFile(hFile_, id, max_size);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -544,10 +513,6 @@ Status WinMmapFile::Allocate(uint64_t offset, uint64_t len) {
   return status;
 }
 
-size_t WinMmapFile::GetUniqueId(char* id, size_t max_size) const {
-  return GetUniqueIdFromFile(hFile_, id, max_size);
-}
-
 //////////////////////////////////////////////////////////////////////////////////
 // WinSequentialFile
 
@@ -716,10 +681,6 @@ Status WinRandomAccessFile::Read(uint64_t offset, size_t n, Slice* result,
 
 Status WinRandomAccessFile::InvalidateCache(size_t offset, size_t length) {
   return Status::OK();
-}
-
-size_t WinRandomAccessFile::GetUniqueId(char* id, size_t max_size) const {
-  return GetUniqueIdFromFile(GetFileHandle(), id, max_size);
 }
 
 size_t WinRandomAccessFile::GetRequiredBufferAlignment() const {
@@ -972,10 +933,6 @@ uint64_t WinWritableFile::GetFileSize() {
 
 Status WinWritableFile::Allocate(uint64_t offset, uint64_t len) {
   return AllocateImpl(offset, len);
-}
-
-size_t WinWritableFile::GetUniqueId(char* id, size_t max_size) const {
-  return GetUniqueIdFromFile(GetFileHandle(), id, max_size);
 }
 
 /////////////////////////////////////////////////////////////////////////

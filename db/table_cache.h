@@ -141,6 +141,9 @@ class TableCache {
   const EnvOptions& env_options_;
   Cache* const cache_;
   std::string row_cache_id_;
+  const uint64_t cache_id_;
+
+  static std::atomic<uint64_t> cache_id_alloc;
 };
 
 }  // namespace rocksdb
