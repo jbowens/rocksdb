@@ -216,9 +216,14 @@ Status PosixSequentialFile::Read(size_t n, Slice* result, char* scratch) {
   assert(result != nullptr && !use_direct_io());
   Status s;
   size_t r = 0;
-  do {
+  while (true) {
     r = fread_unlocked(scratch, 1, n, file_);
-  } while (r == 0 && ferror(file_) && errno == EINTR);
+    if (r == 0 && ferror(file_) && errno == EINTR) {
+      clearerr(file_);
+      continue;
+    }
+    break;
+  }
   *result = Slice(scratch, r);
   if (r < n) {
     if (feof(file_)) {
