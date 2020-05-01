@@ -1558,6 +1558,114 @@ TEST_F(DBRangeDelTest, DeletedMergeOperandReappearsIterPrev) {
   db_->ReleaseSnapshot(snapshot);
 }
 
+TEST_F(DBRangeDelTest, SnapshotRangeDelStress) {
+  const int kFileBytes = 1 << 20;
+  const int kRuns = 1000;
+  const int kMiddleKey = kRuns * kRuns;
+
+  Options options = CurrentOptions();
+  options.compression = kNoCompression;
+  options.target_file_size_base = kFileBytes;
+  Reopen(options);
+
+  std::vector<const Snapshot*> snapshots;
+  for (int r = 0; r < kRuns; ++r) {
+      // We use a keyspace that is 2*kRuns^2 wide. In other words there are
+      // 2*kRuns sections of the keyspace, each with kRuns elements. On every
+      // run, we write to the r-th element of each section of the keyspace.
+      for (int i = 0; i < 2 * kRuns; i++) {
+        ASSERT_OK(Put(Key(kRuns * i + r), "a"));
+      }
+
+      // Now we delete some the keyspace through a DeleteRange. We delete from
+      // the middle of the keyspace outwards. Since the keyspace is made of
+      // 2*kRun sections, we delete an additional two of these sections per run.
+      ASSERT_OK(db_->DeleteRange(WriteOptions(), db_->DefaultColumnFamily(),
+                  Key(kMiddleKey - kRuns * r), Key(kMiddleKey + kRuns * r)));
+
+      snapshots.push_back(db_->GetSnapshot());
+  }
+
+  ASSERT_OK(dbfull()->TEST_SwitchMemtable());
+
+  int run = 0;
+  for (auto* snapshot : snapshots) {
+    // Count the keys at this snapshot.
+    ReadOptions read_opts;
+    read_opts.snapshot = snapshot;
+    auto* iter = db_->NewIterator(read_opts);
+    iter->SeekToFirst();
+    int keys_found = 0;
+    for (; iter->Valid(); iter->Next()) {
+      ++keys_found;
+    }
+    delete iter;
+
+    // At the time that this snapshot was taken, (run+1)*2*kRuns
+    // keys were at one point SET (one in each of the 2*kRuns
+    // sections per run).
+    // But this run also deleted the 2*run middlemost sections.
+    // When this snapshot was taken, a SET to each of those sections
+    // had been made (run+1) times, so 2*run*(run+1) previously-set
+    // keys are now deleted with the delete range.
+    int keys_expected = (run+1) * 2 * kRuns - 2*run*(run+1);
+
+    ASSERT_EQ(keys_expected, keys_found);
+
+    db_->ReleaseSnapshot(snapshot);
+    ++run;
+  }
+}
+
+TEST_F(DBRangeDelTest, SnapshotPreventsDroppedKeysInImmMemTables) {
+  const int kFileBytes = 1 << 20;
+
+  Options options = CurrentOptions();
+  options.compression = kNoCompression;
+  options.disable_auto_compactions = true;
+  options.target_file_size_base = kFileBytes;
+  Reopen(options);
+
+  // block flush thread -> pin immtables in memory
+  SyncPoint::GetInstance()->DisableProcessing();
+  SyncPoint::GetInstance()->LoadDependency({
+      {"SnapshotPreventsDroppedKeysInImmMemTables:AfterNewIterator",
+       "DBImpl::BGWorkFlush"},
+  });
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(Put(Key(0), "a"));
+  ASSERT_OK(Put(Key(5), "c"));
+  ASSERT_OK(Put(Key(6), "d"));
+  std::unique_ptr<const Snapshot, std::function<void(const Snapshot*)>>
+      snapshot(db_->GetSnapshot(),
+               [this](const Snapshot* s) { db_->ReleaseSnapshot(s); });
+
+  ASSERT_OK(db_->DeleteRange(WriteOptions(), db_->DefaultColumnFamily(), Key(0),
+                             Key(10)));
+
+  ASSERT_OK(dbfull()->TEST_SwitchMemtable());
+
+  ReadOptions read_opts;
+  read_opts.snapshot = snapshot.get();
+  std::unique_ptr<Iterator> iter(db_->NewIterator(read_opts));
+
+  TEST_SYNC_POINT("SnapshotPreventsDroppedKeysInImmMemTables:AfterNewIterator");
+
+  iter->SeekToFirst();
+  ASSERT_TRUE(iter->Valid());
+  ASSERT_EQ(Key(0), iter->key());
+  iter->Next();
+  ASSERT_TRUE(iter->Valid());
+  ASSERT_EQ(Key(5), iter->key());
+  iter->Next();
+  ASSERT_TRUE(iter->Valid());
+  ASSERT_EQ(Key(6), iter->key());
+
+  iter->Next();
+  ASSERT_FALSE(iter->Valid());
+}
+
 TEST_F(DBRangeDelTest, RangeTombstoneWrittenToMinimalSsts) {
   // Adapted from
   // https://github.com/cockroachdb/cockroach/blob/de8b3ea603dd1592d9dc26443c2cc92c356fbc2f/pkg/storage/engine/rocksdb_test.go#L1267-L1398.
